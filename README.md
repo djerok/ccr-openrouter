@@ -66,18 +66,31 @@ miss the extension.
 
 ## Models
 
-| slot | model | when |
+| slot | model | why |
 |---|---|---|
-| default, background | `deepseek/deepseek-v4-flash-0731` | everything |
-| opus slot | `z-ai/glm-5.3-flash` | `/model opus`, when you want more |
+| default, background | `z-ai/glm-5.3-flash` | answers reliably, including on tool-using turns |
+| `/model opus` | `deepseek/deepseek-v4-flash-0731` | 3.75x cheaper, but see below |
 
-At the time of writing that is $0.04/M in versus $0.15/M in.
+**The cheaper model is not the default, on purpose.** Measured on a clean machine:
+`deepseek/deepseek-v4-flash-0731` ends a tool-using turn with **no text block at all** on
+roughly half of attempts — the tools run, the turn ends, nothing is printed. GLM answered
+every time. A model that costs a quarter as much and silently drops answers is not the
+cheaper option.
 
-**Which model is "cheap" is decided at install time from live prices, not hardcoded.** The
-cheaper becomes the default; the pricier becomes the opus slot. If a provider reprices, the
-roles follow instead of inverting. Both prices are printed so you can see the choice.
+If you want it anyway:
 
-Edit the `WANTED` table at the top of `setup.js` for different models.
+```sh
+node setup.js --key sk-or-v1-... --cheap
+```
+
+Extended thinking is disabled (`MAX_THINKING_TOKENS=0`) for the same family of reasons:
+OpenRouter returns thinking blocks with an empty signature, and once one is echoed back in
+the history the model stops emitting text. It is also a large saving — in a measured request
+57 of 63 output tokens were thinking.
+
+Which of the two is "cheap" is still read from live prices at install time, so a reprice
+cannot invert the labels. Edit the `WANTED` table at the top of `setup.js` for different
+models.
 
 ### Caching
 

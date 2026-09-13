@@ -24,6 +24,8 @@
  *   node setup.js --on                 # back to OpenRouter
  *   node setup.js --uninstall          # restore the newest backup
  *   node setup.js --no-verify          # skip the live test request
+ *   node setup.js --cheap              # use the cheaper model as the default, accepting
+ *                                      # that it sometimes answers with nothing
  *   node setup.js --efficient          # token-saving setup: reply compression + plain
  *                                      # language rules (same as --extras)
  *   node setup.js --extras             # also install caveman + a plain-language CLAUDE.md
@@ -1476,11 +1478,23 @@ async function install() {
   const first = pickModel(catalogue, WANTED.a);
   const second = pickModel(catalogue, WANTED.b);
 
-  // Cheap vs expensive comes from live prices, not from the order above, so a
-  // reprice cannot silently invert the whole routing table.
+  // Cheap vs expensive still comes from live prices, so a reprice cannot invert
+  // the labels.
   const [cheap, dear] = [first, second].sort((x, y) => blendedPrice(x) - blendedPrice(y));
-  ok(`cheap -> ${cheap.id}  ${C.dim}${priceLabel(cheap)}${C.reset}`);
-  ok(`dear  -> ${dear.id}  ${C.dim}${priceLabel(dear)}${C.reset}`);
+
+  // ...but price does not decide which one answers by default. Measured on a
+  // clean machine: DeepSeek V4 Flash ends a tool-using turn with no text block
+  // at all on roughly half of attempts — the tools run and nothing is printed.
+  // GLM 5.3 Flash answered every time. A model that costs a quarter as much and
+  // silently drops answers is not the cheaper option, so the reliable one is the
+  // default and --cheap opts into the other.
+  const main = hasFlag('--cheap') ? cheap : dear;
+  const secondary = hasFlag('--cheap') ? dear : cheap;
+  ok(`default -> ${main.id}  ${C.dim}${priceLabel(main)}${C.reset}`);
+  ok(`other   -> ${secondary.id}  ${C.dim}${priceLabel(secondary)}${C.reset}`);
+  if (!hasFlag('--cheap')) {
+    info(`${cheap.id} is cheaper but drops answers on tool-using turns — --cheap to use it anyway`);
+  }
   for (const m of [first, second]) {
     if (m.matchedBy === 'fuzzy') warn(`${m.id} was a fuzzy match — the exact slug is gone`);
   }
@@ -1531,7 +1545,7 @@ async function install() {
   if (!hasFlag('--no-verify')) {
     say('Verifying with one real request');
     try {
-      const body = await verify(key, cheap.id);
+      const body = await verify(key, main.id);
       const said = (body.content || []).map((b) => b.text || '').join('').trim();
       ok(`${body.model} replied${said ? `: ${JSON.stringify(said.slice(0, 40))}` : ' (thinking-only, still a success)'}`);
       if (body.usage) info(`billed ${body.usage.input_tokens} in / ${body.usage.output_tokens} out`);
@@ -1547,8 +1561,8 @@ async function install() {
   out(`  ${C.bold}version:${C.reset}            ${shortSha(installedSha())}  ${C.dim}(github.com/${REPO})${C.reset}`);
   out(`  ${C.bold}claude:${C.reset}             ${target}`);
   out(`  ${C.bold}settings:${C.reset}           ${CLAUDE_SETTINGS}`);
-  out(`  everyday model     : ${cheap.id}`);
-  out(`  when you need more : ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
+  out(`  everyday model     : ${main.id}`);
+  out(`  the other one      : ${C.cyan}/model opus${C.reset} -> ${secondary.id}`);
   out(`  back to Anthropic  : node setup.js --off`);
   out(`  ${C.bold}VSCode:${C.reset}             reload the window (Ctrl+Shift+P -> "Developer: Reload Window")`);
   out(`\n  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
@@ -1571,7 +1585,7 @@ async function install() {
     // The settings file is written already and a fresh process reads it, but
     // passing the same variables here means this very first session is routed
     // even if something is odd about how settings are picked up.
-    env: { ...process.env, ...routingEnv(key, cheap.id, dear.id, contextTokens) },
+    env: { ...process.env, ...routingEnv(key, main.id, secondary.id, contextTokens) },
     shell: IS_WIN && !/\.exe$/i.test(target),
   });
   if (res.error) {
