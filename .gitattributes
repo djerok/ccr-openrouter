@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings — CRLF makes Linux fail with
+# "bad interpreter: /bin/sh^M", which is impossible for a user to diagnose.
+*.sh   text eol=lf
+setup.js text eol=lf
+*.ps1  text eol=crlf
+*.md   text
