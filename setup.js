@@ -1,33 +1,32 @@
 #!/usr/bin/env node
 /**
- * setup.js — point a fresh Claude Code install at OpenRouter models.
+ * setup.js — point Claude Code at OpenRouter models.
  *
- * Turns an unconfigured Claude Code (CLI *and* VSCode extension) into one that
- * routes every request through Claude Code Router (CCR) to OpenRouter, using:
+ * Works for the CLI and the VSCode extension at once, because both read the
+ * `env` block in ~/.claude/settings.json.
  *
- *     default / background : deepseek/deepseek-v4-flash-0731
- *     think    / longContext: z-ai/glm-5.3-flash
+ *     default / background : the cheaper of the two models
+ *     opus slot            : the pricier one, for when you ask it to think
  *
- * and installs a statusline that reports the model actually used plus the
- * reasoning effort that was sent with the request.
- *
- * Both surfaces are covered by one mechanism: the `env` block in
- * ~/.claude/settings.json. Claude Code applies it to every session it starts,
- * so there is no need for shell aliases, and the VSCode extension inherits it
- * without any VSCode-specific configuration.
+ * There is no proxy, no daemon and no background service. OpenRouter serves the
+ * Anthropic Messages API natively at https://openrouter.ai/api/v1/messages, so
+ * Claude Code talks to it directly. Earlier versions of this script routed
+ * through Claude Code Router; that added a native SQLite dependency, a port, a
+ * process to keep alive and an autostart entry, every one of which was a way
+ * for the install to fail. None of it was necessary.
  *
  * Usage:
- *   node setup.js --key sk-or-v1-...   # full install
+ *   node setup.js --key sk-or-v1-...   # install
  *   OPENROUTER_API_KEY=sk-or-v1-... node setup.js
- *   node setup.js --no-autostart       # skip the OS autostart entry
- *   node setup.js --no-verify          # skip the live end-to-end request
- *   node setup.js --off                # temporarily go back to Anthropic
- *   node setup.js --on                 # re-enable OpenRouter routing
- *   node setup.js --status             # show current routing state
- *   node setup.js --doctor             # diagnose a broken environment, change nothing
- *   node setup.js --uninstall          # restore the newest backups
+ *   node setup.js --status             # what is configured
+ *   node setup.js --doctor             # diagnose, change nothing
+ *   node setup.js --off                # back to your Anthropic account
+ *   node setup.js --on                 # back to OpenRouter
+ *   node setup.js --uninstall          # restore the newest backup
+ *   node setup.js --no-verify          # skip the live test request
+ *   node setup.js --no-extras          # skip CLAUDE.md and the token savers
  *
- * Requires Node >= 18 (uses global fetch). No npm dependencies.
+ * Requires Node >= 18 (global fetch). No npm dependencies.
  */
 
 'use strict';
@@ -41,66 +40,56 @@ const { execFileSync, spawnSync } = require('child_process');
 // Configuration
 // ---------------------------------------------------------------------------
 
-// Desired models, as (label, exact slug, fuzzy fallback) triples. The exact
-// slug is checked against the live /models list at install time; if OpenRouter
-// has renamed it, the fuzzy terms pick the closest surviving match rather than
-// writing a config that 404s on the first request.
+// Checked against the live catalogue at install time. If a slug is retired, the
+// fuzzy terms find the closest surviving model rather than writing a config
+// that fails on the first prompt.
 const WANTED = {
-  fast: {
+  a: {
     label: 'DeepSeek V4 Flash 0731',
     slug: 'deepseek/deepseek-v4-flash-0731',
     fuzzy: ['deepseek', 'flash', '0731'],
   },
-  smart: {
+  b: {
     label: 'GLM 5.3 Flash',
     slug: 'z-ai/glm-5.3-flash',
     fuzzy: ['glm', '5.3', 'flash'],
   },
 };
 
+const API_ROOT = 'https://openrouter.ai/api';
+const MODELS_URL = `${API_ROOT}/v1/models`;
+const MESSAGES_URL = `${API_ROOT}/v1/messages`;
+
 const HOME = os.homedir();
-const CCR_DIR = path.join(HOME, '.claude-code-router');
-const CCR_CONFIG = path.join(CCR_DIR, 'config.json');
-const CCR_LOG_DIR = path.join(CCR_DIR, 'logs');
 const CLAUDE_DIR = path.join(HOME, '.claude');
 const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
+const CLAUDE_MD = path.join(CLAUDE_DIR, 'CLAUDE.md');
 const STATUSLINE = path.join(CLAUDE_DIR, 'statusline-openrouter.js');
-const STATE_FILE = path.join(CCR_DIR, 'ccr-openrouter-state.json');
-
-const HOST = '127.0.0.1';
-const PORT = 3456;
-const BASE_URL = `http://${HOST}:${PORT}`;
+const STATE_FILE = path.join(CLAUDE_DIR, 'ccr-openrouter-state.json');
 
 const IS_WIN = process.platform === 'win32';
 
 // ---------------------------------------------------------------------------
-// Small helpers
+// Helpers
 // ---------------------------------------------------------------------------
 
 const argv = process.argv.slice(2);
 const hasFlag = (f) => argv.includes(f);
 const flagValue = (f) => {
   const i = argv.indexOf(f);
-  return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--')
-    ? argv[i + 1]
-    : null;
+  return i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : null;
 };
 
 const C = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  cyan: '\x1b[36m',
+  reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+  red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m',
 };
 
 let step = 0;
-const say = (msg) => console.log(`${C.cyan}[${++step}]${C.reset} ${msg}`);
-const ok = (msg) => console.log(`    ${C.green}ok${C.reset}   ${msg}`);
-const warn = (msg) => console.log(`    ${C.yellow}warn${C.reset} ${msg}`);
-const info = (msg) => console.log(`    ${C.dim}${msg}${C.reset}`);
+const say = (m) => console.log(`${C.cyan}[${++step}]${C.reset} ${m}`);
+const ok = (m) => console.log(`    ${C.green}ok${C.reset}   ${m}`);
+const warn = (m) => console.log(`    ${C.yellow}warn${C.reset} ${m}`);
+const info = (m) => console.log(`    ${C.dim}${m}${C.reset}`);
 
 function die(msg, hint) {
   console.error(`\n${C.red}fatal:${C.reset} ${msg}`);
@@ -125,19 +114,16 @@ function writeJson(file, obj) {
 
 function backup(file) {
   if (!fs.existsSync(file)) return null;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = `${file}.bak.${stamp}`;
+  const dest = `${file}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
   fs.copyFileSync(file, dest);
   return dest;
 }
 
-/** Run a command, returning { code, stdout, stderr }. Never throws. */
 function run(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    shell: IS_WIN, // ccr/npm/claude are .cmd shims on Windows
-    ...opts,
-  });
+  // shell:true only where it is needed (Windows .cmd shims), because it also
+  // turns arguments into an unescaped string.
+  const needsShell = IS_WIN && !/\.(exe)$/i.test(cmd);
+  const res = spawnSync(cmd, args, { encoding: 'utf8', shell: needsShell, ...opts });
   return {
     code: res.status === null ? 1 : res.status,
     stdout: (res.stdout || '').trim(),
@@ -145,85 +131,8 @@ function run(cmd, args, opts = {}) {
   };
 }
 
-/** Absolute path of a globally installed npm bin, or null. */
-function globalBin(cmd) {
-  const prefix = run('npm', ['prefix', '-g']).stdout;
-  if (!prefix) return null;
-  const candidates = IS_WIN
-    ? [path.join(prefix, `${cmd}.cmd`), path.join(prefix, `${cmd}.ps1`), path.join(prefix, cmd)]
-    : [path.join(prefix, 'bin', cmd), path.join(prefix, cmd)];
-  return candidates.find((p) => fs.existsSync(p)) || null;
-}
-
-/**
- * Probe a command. Distinguishes the three outcomes that matter, because
- * conflating them produces a misleading error: the binary can be absent, or
- * present-but-unreachable on PATH, or present-and-reachable but crashing on
- * startup (e.g. a native dependency whose install script never ran).
- *
- * Returns { state: 'ok'|'broken'|'missing', version, path, stderr }.
- */
-/**
- * Some programs validate their configuration before doing anything at all —
- * CCR refuses even `--version` with "No available models" until a provider
- * exists. That is a working install with nothing configured yet, not a broken
- * one, and treating it as broken sends the user chasing a compiler.
- */
-function isConfigComplaint(stderr) {
-  return /no available models|configure at least one|config(uration)? (file )?(not found|missing|invalid)/i.test(
-    stderr
-  );
-}
-
-function probeCommand(cmd) {
-  for (const args of [['--version'], ['-v']]) {
-    const res = run(cmd, args);
-    if (res.code === 0 && res.stdout) {
-      return { state: 'ok', version: res.stdout.split('\n')[0], path: cmd, stderr: '' };
-    }
-    if (res.stderr && isConfigComplaint(res.stderr)) {
-      return { state: 'ok', version: 'installed, unconfigured', path: cmd, stderr: '' };
-    }
-    // A non-zero exit with real stderr means it ran and failed — not missing.
-    if (res.stderr && !/not recognized|not found|ENOENT/i.test(res.stderr)) {
-      return { state: 'broken', version: null, path: cmd, stderr: res.stderr };
-    }
-  }
-
-  // Not reachable by name. It may still be installed but off PATH.
-  const abs = globalBin(cmd);
-  if (!abs) return { state: 'missing', version: null, path: null, stderr: '' };
-
-  for (const args of [['--version'], ['-v']]) {
-    const res = run(abs, args);
-    if (res.code === 0 && res.stdout) {
-      return { state: 'ok', version: res.stdout.split('\n')[0], path: abs, stderr: '' };
-    }
-    if (res.stderr && isConfigComplaint(res.stderr)) {
-      return { state: 'ok', version: 'installed, unconfigured', path: abs, stderr: '' };
-    }
-    if (res.stderr) {
-      return { state: 'broken', version: null, path: abs, stderr: res.stderr };
-    }
-  }
-  return { state: 'broken', version: null, path: abs, stderr: '(no output)' };
-}
-
-function commandExists(cmd) {
-  const p = probeCommand(cmd);
-  return p.state === 'ok' ? p.version : null;
-}
-
-/** npm >= 12 refuses to run dependency install scripts unless named explicitly. */
-function npmMajor() {
-  const v = run('npm', ['--version']).stdout;
-  return Number((v.split('.')[0] || '0').replace(/\D/g, '')) || 0;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 // ---------------------------------------------------------------------------
-// 1. Prerequisites
+// Prerequisites
 // ---------------------------------------------------------------------------
 
 function checkNode() {
@@ -231,157 +140,79 @@ function checkNode() {
   if (major < 18) {
     die(
       `Node ${process.versions.node} is too old (need >= 18 for global fetch).`,
-      'Install Node 18+ from https://nodejs.org and re-run.'
+      'Install Node 18+ from https://nodejs.org, or use install.ps1 / install.sh which do it for you.'
     );
   }
   ok(`node ${process.versions.node}`);
 }
 
-/**
- * npm ships with Node, so a missing npm means a partial or unusual install —
- * worth catching here rather than as a confusing failure three steps later.
- */
-function checkNpm() {
-  const v = run('npm', ['--version']).stdout;
-  if (!v) {
-    die(
-      'npm is not available, even though Node is.',
-      IS_WIN
-        ? 'Reinstall Node from https://nodejs.org and leave "npm package manager" checked.'
-        : 'On Debian/Ubuntu the nodejs package sometimes omits it:\n  sudo apt-get install -y npm\nOtherwise reinstall Node from https://nodejs.org.'
-    );
-  }
-  ok(`npm ${v}`);
-
-  // A corrupted cache produces install failures that look like network errors.
+function probeClaude() {
+  const res = run('claude', ['--version']);
+  if (res.code === 0 && res.stdout) return res.stdout.split('\n')[0];
   const prefix = run('npm', ['prefix', '-g']).stdout;
-  if (!prefix) {
-    warn('npm could not report its global prefix — your npm config may be damaged');
-    info('If installs fail below, try:  npm cache clean --force');
-  }
-}
-
-/** Resolved absolute paths, so later calls never depend on PATH. */
-const BIN = {};
-
-const PERMS_HINT = IS_WIN
-  ? 'If this is a permissions error, reopen the terminal as Administrator, or set a user-writable npm prefix:\n  npm config set prefix "%LOCALAPPDATA%\\npm"'
-  : 'Try again with sudo, or set a user-writable npm prefix:\n  npm config set prefix "$HOME/.npm-global"';
-
-/**
- * @param nativeDeps packages whose install scripts must run for the binary to
- *        work at all. npm >= 12 blocks these by default, and the failure shows
- *        up much later as the binary crashing on startup.
- */
-function npmInstallGlobal(pkg, nativeDeps = []) {
-  const args = ['install', '-g'];
-  // Always pass it when there is something to allow. npm 11 already blocks
-  // install scripts, npm 12 kept the behaviour, and older versions treat the
-  // flag as unknown config — a warning, not a failure. Version-gating this was
-  // a bug: it silently did nothing on npm 11.
-  if (nativeDeps.length) args.push(`--allow-scripts=${nativeDeps.join(',')}`);
-  args.push(pkg);
-  return run('npm', args, { stdio: 'inherit' });
-}
-
-function ensureNpmPackage(binary, pkg, label, nativeDeps = []) {
-  let probe = probeCommand(binary);
-
-  if (probe.state === 'ok') {
-    BIN[binary] = probe.path;
-    ok(`${label} present (${probe.version})`);
-    return;
-  }
-
-  if (probe.state === 'missing') {
-    info(`${label} not found — installing ${pkg} globally (this takes a minute)`);
-    const res = npmInstallGlobal(pkg, nativeDeps);
-    if (res.code !== 0) die(`npm install -g ${pkg} failed (exit ${res.code}).`, PERMS_HINT);
-    probe = probeCommand(binary);
-  }
-
-  // Installed, reachable, but exiting non-zero — a half-finished or corrupted
-  // install. Attempt one repair before giving up, since the alternative is
-  // telling the user to debug someone else's package.
-  if (probe.state === 'broken') {
-    if (nativeDeps.length) {
-      warn(`${label} is installed but fails to start — reinstalling with its build scripts enabled`);
-      info(`(npm ${npmMajor()} blocks install scripts by default: ${nativeDeps.join(', ')})`);
-    } else {
-      warn(`${label} is installed but fails to start — reinstalling it once`);
+  if (prefix) {
+    const cands = IS_WIN
+      ? [path.join(prefix, 'claude.cmd'), path.join(prefix, 'claude')]
+      : [path.join(prefix, 'bin', 'claude'), path.join(prefix, 'claude')];
+    for (const c of cands) {
+      if (!fs.existsSync(c)) continue;
+      const r = run(c, ['--version']);
+      if (r.code === 0 && r.stdout) return r.stdout.split('\n')[0];
     }
-    const res = npmInstallGlobal(pkg, nativeDeps);
-    if (res.code === 0) probe = probeCommand(binary);
   }
+  return null;
+}
 
-  if (probe.state === 'ok') {
-    BIN[binary] = probe.path;
-    ok(`${label} installed`);
-    return;
-  }
+function ensureClaudeCode() {
+  const v = probeClaude();
+  if (v) return ok(`Claude Code present (${v})`);
 
-  if (probe.state === 'broken') {
+  info('Claude Code not found — installing @anthropic-ai/claude-code globally');
+  const res = run('npm', ['install', '-g', '@anthropic-ai/claude-code'], { stdio: 'inherit' });
+  if (res.code !== 0) {
     die(
-      `${label} is installed at ${probe.path} but crashes when run.`,
-      `Its own error was:\n\n${probe.stderr.split('\n').slice(0, 8).join('\n')}\n\n` +
-        `Most often this is an unbuilt native module. Try:\n` +
-        `  npm install -g --allow-scripts=${(nativeDeps.join(',') || 'better-sqlite3')} ${pkg}\n` +
-        `and if that fails, install the build tools it needs (Python 3 and a C++ compiler),\n` +
-        `then re-run this script.`
+      `npm install -g @anthropic-ai/claude-code failed (exit ${res.code}).`,
+      IS_WIN
+        ? 'If this is a permissions error, reopen the terminal as Administrator, or:\n  npm config set prefix "%LOCALAPPDATA%\\npm"'
+        : 'Try sudo, or:\n  npm config set prefix "$HOME/.npm-global"'
     );
   }
-
-  die(
-    `${pkg} installed but "${binary}" is not runnable.`,
-    `Nothing was found in your npm global bin directory:\n  ${run('npm', ['prefix', '-g']).stdout}\n` +
-      `Add that directory to your PATH, open a new terminal, and re-run.\n${PERMS_HINT}`
-  );
-}
-
-/**
- * Prefer the absolute path resolved at install time over a bare PATH lookup —
- * a freshly installed global bin is often not yet visible to this process.
- */
-function ccrPath() {
-  return BIN.ccr || globalBin('ccr') || 'ccr';
-}
-
-function runCcr(args, opts) {
-  return run(ccrPath(), args, opts);
+  const after = probeClaude();
+  if (!after) {
+    die(
+      'Claude Code installed but is not runnable.',
+      `Add your npm global bin directory to PATH and open a new terminal:\n  ${run('npm', ['prefix', '-g']).stdout}`
+    );
+  }
+  ok(`Claude Code installed (${after})`);
 }
 
 // ---------------------------------------------------------------------------
-// 2. Resolve the API key and the model slugs against the live catalogue
+// Key and models
 // ---------------------------------------------------------------------------
 
 function resolveKey() {
-  // Deliberately has no default. A key baked into a script is a key that ends up
-  // in someone's git history.
-  const existing = readJson(CCR_CONFIG, {});
-  const reused = (existing.Providers || []).find((p) => p.name === 'openrouter');
+  // No baked-in default: a key inside a script is a key in someone's git history.
+  const prev = readJson(CLAUDE_SETTINGS, {});
+  const reused =
+    prev.env && typeof prev.env.ANTHROPIC_AUTH_TOKEN === 'string' &&
+    prev.env.ANTHROPIC_AUTH_TOKEN.startsWith('sk-or-')
+      ? prev.env.ANTHROPIC_AUTH_TOKEN
+      : null;
 
-  const key =
-    flagValue('--key') ||
-    process.env.OPENROUTER_API_KEY ||
-    (reused && reused.api_key) ||
-    null;
-
+  const key = flagValue('--key') || process.env.OPENROUTER_API_KEY || reused;
   if (!key) {
-    die(
-      'No OpenRouter API key.',
-      'Get one at https://openrouter.ai/keys, then either:\n' +
-        '  node setup.js --key sk-or-v1-...\n' +
-        '  OPENROUTER_API_KEY=sk-or-v1-... node setup.js'
-    );
+    die('No OpenRouter API key.', [
+      'Get one at https://openrouter.ai/keys (and put a few dollars of credit on it), then:',
+      '  node setup.js --key sk-or-v1-...',
+      '  OPENROUTER_API_KEY=sk-or-v1-... node setup.js',
+    ].join('\n'));
   }
   if (!/^sk-or-v1-[0-9a-f]{16,}$/i.test(key)) {
-    die(
-      'That does not look like an OpenRouter key (expected sk-or-v1-...).',
-      'Pass a good one with --key, or set $OPENROUTER_API_KEY.'
-    );
+    die('That does not look like an OpenRouter key (expected sk-or-v1-...).');
   }
   if (!flagValue('--key') && !process.env.OPENROUTER_API_KEY) {
-    info('reusing the OpenRouter key already in your CCR config');
+    info('reusing the OpenRouter key already in your settings');
   }
   return key;
 }
@@ -389,50 +220,32 @@ function resolveKey() {
 async function fetchCatalogue(key) {
   let res;
   try {
-    res = await fetch('https://openrouter.ai/api/v1/models', {
+    res = await fetch(MODELS_URL, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(30000),
     });
   } catch (err) {
-    die(
-      `Could not reach openrouter.ai: ${err.message}`,
-      'Check your network/proxy. If you are behind a proxy, set HTTPS_PROXY before running.'
-    );
+    die(`Could not reach openrouter.ai: ${err.message}`,
+      'Check your network. Behind a proxy, set HTTPS_PROXY before running.');
   }
-  if (res.status === 401) {
-    die('OpenRouter rejected the key (401).', 'The key is invalid, revoked, or out of credit.');
-  }
+  if (res.status === 401) die('OpenRouter rejected the key (401).', 'Invalid, revoked, or out of credit.');
   if (!res.ok) die(`OpenRouter /models returned HTTP ${res.status}.`);
   const body = await res.json();
-  if (!Array.isArray(body.data) || body.data.length === 0) {
-    die('OpenRouter returned an empty model list.');
-  }
+  if (!Array.isArray(body.data) || !body.data.length) die('OpenRouter returned an empty model list.');
   return body.data;
 }
 
-/**
- * Cost per million tokens, weighted 1:3 input:output — roughly the shape of a
- * coding session, where the model reads far more than it writes but output is
- * the pricier half.
- */
+/** Blended $/M, weighted 1:3 input:output — roughly a coding session's shape. */
 function blendedPrice(m) {
   const p = m.pricing || {};
-  const inp = Number(p.prompt) || 0;
-  const out = Number(p.completion) || 0;
-  return (inp * 3 + out) * 1e6 / 4;
+  return ((Number(p.prompt) || 0) * 3 + (Number(p.completion) || 0)) * 1e6 / 4;
 }
 
 function priceLabel(m) {
   const p = m.pricing || {};
-  const inp = (Number(p.prompt) || 0) * 1e6;
-  const out = (Number(p.completion) || 0) * 1e6;
-  return `$${inp.toFixed(2)}/M in, $${out.toFixed(2)}/M out`;
+  return `$${((Number(p.prompt) || 0) * 1e6).toFixed(2)}/M in, $${((Number(p.completion) || 0) * 1e6).toFixed(2)}/M out`;
 }
 
-/**
- * Prefer the exact slug. If it is gone, take the highest-context model whose id
- * contains every fuzzy term — never silently fall through to something unrelated.
- */
 function pickModel(catalogue, want) {
   const exact = catalogue.find((m) => m.id === want.slug);
   if (exact) return { ...exact, matchedBy: 'exact' };
@@ -440,328 +253,140 @@ function pickModel(catalogue, want) {
   const candidates = catalogue
     .filter((m) => !m.id.startsWith('~') && !m.id.endsWith(':batch'))
     .filter((m) => want.fuzzy.every((t) => m.id.toLowerCase().includes(t)));
-
-  if (candidates.length === 0) {
-    die(
-      `OpenRouter no longer lists "${want.slug}" and nothing matches [${want.fuzzy.join(', ')}].`,
-      'Edit the WANTED table at the top of this script with a current slug from https://openrouter.ai/models'
-    );
+  if (!candidates.length) {
+    die(`OpenRouter no longer lists "${want.slug}" and nothing matches [${want.fuzzy.join(', ')}].`,
+      'Edit the WANTED table at the top of this script with a current slug from https://openrouter.ai/models');
   }
   candidates.sort((a, b) => (b.context_length || 0) - (a.context_length || 0));
   return { ...candidates[0], matchedBy: 'fuzzy' };
 }
 
 // ---------------------------------------------------------------------------
-// 3. CCR config
+// Settings
 // ---------------------------------------------------------------------------
 
-function localToken(existing) {
-  // Reused across runs so an already-open VSCode window keeps working.
-  if (existing && typeof existing === 'string' && existing.startsWith('sk-ccr-')) {
-    return existing;
-  }
-  return 'sk-ccr-' + require('crypto').randomBytes(16).toString('hex');
-}
-
-function writeCcrConfig(key, fast, smart) {
-  const prev = readJson(CCR_CONFIG, {});
-  const token = localToken(prev.APIKEY);
-
-  // Keep any providers the user already had; replace only ours.
-  const otherProviders = (prev.Providers || []).filter((p) => p.name !== 'openrouter');
-
-  const openrouter = {
-    name: 'openrouter',
-    api_base_url: 'https://openrouter.ai/api/v1/chat/completions',
-    api_key: key,
-    models: [fast.id, smart.id],
-    transformer: {
-      // The openrouter transformer maps Anthropic-shaped requests (including
-      // Claude Code's `thinking` block) onto OpenRouter's `reasoning` field,
-      // so extended thinking and effort flow through without extra config.
-      use: [['openrouter'], ['maxtoken', { max_tokens: 32000 }]],
-    },
-  };
-
-  const config = {
-    ...prev,
-    APIKEY: token,
-    HOST,
-    PORT,
-    API_TIMEOUT_MS: '600000',
-    LOG: true,
-    LOG_LEVEL: 'info',
-    Providers: [openrouter, ...otherProviders],
-    Router: {
-      ...(prev.Router || {}),
-      default: `openrouter,${fast.id}`,
-      background: `openrouter,${fast.id}`,
-      think: `openrouter,${smart.id}`,
-      longContext: `openrouter,${smart.id}`,
-      longContextThreshold: Math.max(
-        20000,
-        Math.floor((fast.context_length || 128000) * 0.6)
-      ),
-    },
-  };
-
-  const bak = backup(CCR_CONFIG);
-  writeJson(CCR_CONFIG, config);
-  if (bak) info(`previous CCR config backed up to ${path.basename(bak)}`);
-  return { token, config };
-}
-
-// ---------------------------------------------------------------------------
-// 4. Claude Code settings — the part that covers CLI *and* the VSCode extension
-// ---------------------------------------------------------------------------
-
-function routingEnv(token) {
+/**
+ * Several model variables are set rather than one. Claude Code has used
+ * different names across versions for the small/background model, and an
+ * unrecognised variable is ignored, so setting all of them is how this keeps
+ * working across upgrades instead of silently falling back to a Claude model
+ * the key cannot buy.
+ */
+function routingEnv(key, cheap, dear) {
   return {
-    ANTHROPIC_BASE_URL: BASE_URL,
-    ANTHROPIC_AUTH_TOKEN: token,
+    ANTHROPIC_BASE_URL: API_ROOT,
+    ANTHROPIC_AUTH_TOKEN: key,
     ANTHROPIC_API_KEY: '',
+    ANTHROPIC_MODEL: cheap,
+    ANTHROPIC_DEFAULT_MODEL: cheap,
+    ANTHROPIC_SMALL_FAST_MODEL: cheap,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: cheap,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: cheap,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: dear,
+    CLAUDE_CODE_SUBAGENT_MODEL: cheap,
     API_TIMEOUT_MS: '600000',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   };
 }
 
-function writeClaudeSettings(token) {
+const ROUTING_KEYS = Object.keys(routingEnv('', '', ''));
+
+function writeClaudeSettings(key, cheap, dear) {
   const prev = readJson(CLAUDE_SETTINGS, {});
   const bak = backup(CLAUDE_SETTINGS);
 
-  const next = {
-    ...prev,
-    env: { ...(prev.env || {}), ...routingEnv(token) },
-    statusLine: {
-      type: 'command',
-      command: `"${process.execPath}" "${STATUSLINE}"`,
-      padding: 0,
-    },
-  };
+  const env = { ...(prev.env || {}) };
+  // Remove anything a previous proxy-based install left pointing at localhost.
+  if (typeof env.ANTHROPIC_BASE_URL === 'string' && /127\.0\.0\.1|localhost/.test(env.ANTHROPIC_BASE_URL)) {
+    info('replacing a stale local proxy URL from an older install');
+  }
+  Object.assign(env, routingEnv(key, cheap, dear));
 
-  // A pinned Anthropic-only model (e.g. "opus[1m]") is meaningless once every
-  // request is routed, and on some versions it blocks startup. Park it so --off
-  // can put it back.
+  const next = { ...prev, env };
+  next.statusLine = { type: 'command', command: `"${process.execPath}" "${STATUSLINE}"`, padding: 0 };
+
   if (next.model) {
-    next.__ccrOpenrouterParkedModel = next.model;
+    next.__parkedModel = next.model;
     delete next.model;
-    info(`parked settings.model = "${next.__ccrOpenrouterParkedModel}" (restored by --off)`);
+    info(`parked settings.model = "${next.__parkedModel}" (restored by --off)`);
   }
 
   writeJson(CLAUDE_SETTINGS, next);
-  if (bak) info(`previous Claude settings backed up to ${path.basename(bak)}`);
+  if (bak) info(`previous settings backed up to ${path.basename(bak)}`);
 }
 
 // ---------------------------------------------------------------------------
-// 5. Statusline — model + effort/reasoning, written out by this installer
+// Statusline
 // ---------------------------------------------------------------------------
 
 const STATUSLINE_SOURCE = String.raw`#!/usr/bin/env node
 /**
- * statusline-openrouter.js — generated by ccr-openrouter/setup.js. Do not edit
- * by hand; re-run the installer instead.
+ * statusline-openrouter.js — generated by setup.js. Re-run the installer to
+ * change it.
  *
- * Claude Code pipes a JSON blob on stdin and renders whatever we print on
- * stdout. We answer the question the built-in header cannot: which OpenRouter
- * model actually served this turn, and with how much reasoning.
- *
- * Truth order for the model:
- *   1. the most recent routing decision in the CCR log  (what really happened)
- *   2. the CCR Router table, keyed by the class of model Claude Code asked for
- *   3. "?" — never guess silently
- *
- * Everything is wrapped in try/catch: a broken statusline must degrade to a
- * short string, never to an error that hides the prompt.
+ * Claude Code pipes a JSON blob on stdin and renders stdout. With direct
+ * routing there is no proxy to interrogate: the model Claude Code names IS the
+ * model that answered, so this reads it straight from stdin and falls back to
+ * the configured default.
  */
-
 'use strict';
-
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const CCR_DIR = path.join(os.homedir(), '.claude-code-router');
-const CONFIG = path.join(CCR_DIR, 'config.json');
-
-const C = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  magenta: '\x1b[35m',
-  cyan: '\x1b[36m',
-};
-
-function readStdin() {
-  try {
-    return JSON.parse(fs.readFileSync(0, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-/** Read at most the last 64 KB of the newest CCR log — statuslines must be fast. */
-function tailLog(bytes = 65536) {
-  const dirs = [path.join(CCR_DIR, 'logs'), CCR_DIR];
-  let newest = null;
-  for (const dir of dirs) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      if (!name.endsWith('.log')) continue;
-      const full = path.join(dir, name);
-      try {
-        const st = fs.statSync(full);
-        if (!st.isFile()) continue;
-        if (!newest || st.mtimeMs > newest.mtimeMs) newest = { full, ...st, mtimeMs: st.mtimeMs, size: st.size };
-      } catch {}
-    }
-  }
-  if (!newest) return { text: '', age: Infinity };
-  try {
-    const start = Math.max(0, newest.size - bytes);
-    const fd = fs.openSync(newest.full, 'r');
-    const len = newest.size - start;
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, start);
-    fs.closeSync(fd);
-    return { text: buf.toString('utf8'), age: (Date.now() - newest.mtimeMs) / 1000 };
-  } catch {
-    return { text: '', age: Infinity };
-  }
-}
-
-/** Last "provider,model" CCR resolved, if the log is recent enough to trust. */
-function modelFromLog(text, age) {
-  if (!text || age > 900) return null;
-  const re = /(?:use model|routing to|selected model|model:)\s*"?([a-z0-9_.-]+,[^"\s,]+(?:\/[^"\s,]+)?)"?/gi;
-  let m, last = null;
-  while ((m = re.exec(text)) !== null) last = m[1];
-  if (last) return last;
-
-  // Fall back to any bare OpenRouter-style slug mentioned late in the log.
-  const slug = /"model"\s*:\s*"([a-z0-9_.-]+\/[a-z0-9_.:-]+)"/gi;
-  while ((m = slug.exec(text)) !== null) last = m[1];
-  return last;
-}
-
-/** Reasoning effort/budget CCR last sent upstream. */
-function reasoningFromLog(text, age) {
-  if (!text || age > 900) return null;
-  const effort = /"reasoning"\s*:\s*\{[^}]*"effort"\s*:\s*"(\w+)"/gi;
-  let m, last = null;
-  while ((m = effort.exec(text)) !== null) last = m[1];
-  if (last) return last;
-
-  const budget = /"(?:budget_tokens|max_tokens)"\s*:\s*(\d{3,})[^}]*\}\s*(?=[,}])/gi;
-  const think = /"thinking"\s*:\s*\{[^}]*"budget_tokens"\s*:\s*(\d+)/gi;
-  while ((m = think.exec(text)) !== null) last = m[1];
-  if (last) return Number(last) >= 1 ? formatBudget(Number(last)) : null;
-  void budget;
-  return null;
-}
-
-function formatBudget(n) {
-  return n >= 1000 ? Math.round(n / 1000) + 'k tok' : n + ' tok';
-}
-
-/** Which Router slot Claude Code's requested model maps onto. */
-function routeFor(modelId, ctxTokens, router) {
-  const id = (modelId || '').toLowerCase();
-  const threshold = Number(router.longContextThreshold || 60000);
-  if (ctxTokens && ctxTokens > threshold && router.longContext) return 'longContext';
-  if (id.includes('haiku') && router.background) return 'background';
-  if ((id.includes('opus') || id.includes('think')) && router.think) return 'think';
-  return 'default';
-}
-
-function shortModel(spec) {
-  if (!spec) return null;
-  const bare = spec.includes(',') ? spec.split(',').slice(1).join(',') : spec;
-  return bare.split('/').pop();
-}
-
-function gitBranch(dir) {
-  try {
-    return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 400,
-    }).trim();
-  } catch {
-    return null;
-  }
-}
+const C = { reset:'\x1b[0m', dim:'\x1b[2m', bold:'\x1b[1m', red:'\x1b[31m',
+            green:'\x1b[32m', yellow:'\x1b[33m', blue:'\x1b[34m',
+            magenta:'\x1b[35m', cyan:'\x1b[36m' };
 
 function main() {
-  const input = readStdin();
-  const config = readConfig();
-  const router = config.Router || {};
+  let input = {};
+  try { input = JSON.parse(fs.readFileSync(0, 'utf8')); } catch {}
 
-  const askedFor = (input.model && (input.model.id || input.model.display_name)) || '';
-  const ctxTokens =
-    (input.context && (input.context.used_tokens || input.context.total_tokens)) || 0;
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+  } catch {}
+  const env = settings.env || {};
 
-  const { text, age } = tailLog();
-  const logged = modelFromLog(text, age);
-  const route = routeFor(askedFor, ctxTokens, router);
-  const configured = router[route];
+  const routed = typeof env.ANTHROPIC_BASE_URL === 'string' && env.ANTHROPIC_BASE_URL.includes('openrouter');
 
-  const model = shortModel(logged) || shortModel(configured) || '?';
-  const live = Boolean(logged);
+  const reported = (input.model && (input.model.id || input.model.display_name)) || '';
+  const configured = env.ANTHROPIC_MODEL || '';
+  // Claude Code reports whatever id it sent. If that looks like a plain Claude
+  // name we are not routed, so say so rather than claiming a model that is not
+  // being used.
+  const looksClaude = /^claude[-.]/i.test(reported);
+  const model = routed ? (looksClaude ? configured : reported || configured) : reported || 'anthropic';
+  const short = String(model).split('/').pop() || '?';
 
-  // Effort: what CCR actually sent, else Claude Code's own configured level.
-  let effort = reasoningFromLog(text, age);
-  if (!effort) {
-    try {
-      const s = JSON.parse(
-        fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8')
-      );
-      effort = s.effortLevel || null;
-    } catch {}
-  }
+  const dear = env.ANTHROPIC_DEFAULT_OPUS_MODEL || '';
+  const tier = routed && dear && model === dear ? 'dear' : routed ? 'cheap' : 'anthropic';
+
+  const effort = settings.effortLevel || null;
 
   const dir = (input.workspace && (input.workspace.current_dir || input.workspace.project_dir)) || process.cwd();
-  const branch = gitBranch(dir);
-  const cost = input.cost && typeof input.cost.total_cost_usd === 'number'
-    ? input.cost.total_cost_usd
-    : null;
+  let branch = null;
+  try {
+    branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'],
+      { cwd: dir, encoding: 'utf8', stdio: ['ignore','pipe','ignore'], timeout: 400 }).trim();
+  } catch {}
+
+  const cost = input.cost && typeof input.cost.total_cost_usd === 'number' ? input.cost.total_cost_usd : null;
 
   const parts = [];
-  parts.push(
-    (live ? C.green : C.yellow) + '●' + C.reset +
-    ' ' + C.bold + model + C.reset +
-    C.dim + ' (' + route + ')' + C.reset
-  );
-  parts.push(C.magenta + '⚙ ' + (effort || 'no reasoning') + C.reset);
-  parts.push(C.blue + '📁 ' + path.basename(dir) + C.reset);
-  if (branch) parts.push(C.cyan + '⎇ ' + branch + C.reset);
+  parts.push((routed ? C.green : C.yellow) + '●' + C.reset + ' ' + C.bold + short + C.reset +
+             C.dim + ' (' + tier + ')' + C.reset);
+  if (effort) parts.push(C.magenta + '⚙ ' + effort + C.reset);
+  parts.push(C.blue + path.basename(dir) + C.reset);
+  if (branch) parts.push(C.cyan + branch + C.reset);
   if (cost !== null && cost > 0) parts.push(C.dim + '$' + cost.toFixed(4) + C.reset);
 
-  process.stdout.write(parts.join(C.dim + ' │ ' + C.reset));
+  process.stdout.write(parts.join(C.dim + ' | ' + C.reset));
 }
 
-try {
-  main();
-} catch (err) {
-  process.stdout.write('\x1b[31m● statusline error\x1b[0m ' + String(err.message).slice(0, 60));
+try { main(); } catch (err) {
+  process.stdout.write('\x1b[31m* statusline error\x1b[0m ' + String(err && err.message).slice(0, 60));
 }
 `;
 
@@ -772,182 +397,143 @@ function writeStatusline() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Autostart — the VSCode extension fails cold if CCR is not already running
+// Extras: a plain-language CLAUDE.md and the token savers
 // ---------------------------------------------------------------------------
 
-const AUTOSTART_BEGIN = '# >>> ccr-openrouter: keep the router up for Claude Code >>>';
-const AUTOSTART_END = '# <<< ccr-openrouter <<<';
-const RC_CANDIDATES = ['.zshrc', '.bashrc', '.bash_profile', '.profile'];
+const CLAUDE_MD_BEGIN = '<!-- BEGIN ccr-openrouter: plain language rules -->';
+const CLAUDE_MD_END = '<!-- END ccr-openrouter -->';
+
+const CLAUDE_MD_BODY = `${CLAUDE_MD_BEGIN}
+# How to talk to me
+
+Write like you are explaining to a smart 10-year-old. That is the whole rule.
+
+## Words
+
+- Use small words. "Use" not "utilize". "Fix" not "remediate". "Start" not "initiate".
+- Short sentences. One idea each. If a sentence has two ideas, make it two sentences.
+- No jargon unless it is the real name of a real thing. If you must use a hard word,
+  say what it means right after, in the same sentence.
+- Never say "simply", "just", "obviously", or "as you know". If it were obvious I would
+  not be asking.
+
+## Shape
+
+- Answer first. Explain after. Do not warm up.
+- Keep it short. If you can say it in one line, say it in one line.
+- Use a list when there is more than one thing. Use a table when things compare.
+- Show me the command or the code. Do not describe the command in a paragraph.
+
+## When something breaks
+
+1. Say what broke, in one line.
+2. Say why, in one line.
+3. Give me the exact thing to run or type to fix it.
+
+Do not make me read three paragraphs to find the command.
+
+## Being honest
+
+- If you are not sure, say "I am not sure" and say what you would check.
+- If you guessed, say it was a guess.
+- If something failed, say it failed. Do not describe a failure as a success.
+- If you did not do part of the job, say which part.
+
+## Do not
+
+- Do not apologise more than once.
+- Do not repeat my question back to me.
+- Do not add features I did not ask for.
+- Do not write a summary of what you are about to do, then do it. Just do it.
+${CLAUDE_MD_END}`;
+
+function writeClaudeMd() {
+  let existing = '';
+  try {
+    existing = fs.readFileSync(CLAUDE_MD, 'utf8');
+  } catch {}
+
+  if (existing.includes(CLAUDE_MD_BEGIN)) {
+    const re = new RegExp(
+      escapeRe(CLAUDE_MD_BEGIN) + '[\\s\\S]*?' + escapeRe(CLAUDE_MD_END),
+      'g'
+    );
+    fs.writeFileSync(CLAUDE_MD, existing.replace(re, CLAUDE_MD_BODY));
+    ok(`refreshed the plain-language section of ${CLAUDE_MD}`);
+    return;
+  }
+
+  if (existing.trim()) {
+    backup(CLAUDE_MD);
+    fs.writeFileSync(CLAUDE_MD, existing.replace(/\s*$/, '\n\n') + CLAUDE_MD_BODY + '\n');
+    ok(`appended a plain-language section to your existing ${CLAUDE_MD}`);
+  } else {
+    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+    fs.writeFileSync(CLAUDE_MD, CLAUDE_MD_BODY + '\n');
+    ok(`wrote ${CLAUDE_MD}`);
+  }
+}
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * Which shell rc file to write.
- *
- * Getting this wrong is silent: appending to .bashrc on macOS means zsh never
- * reads it, so the router simply never starts and the VSCode extension reports
- * a connection failure with nothing to point at. macOS has defaulted to zsh
- * since Catalina, and $SHELL is not always set when this runs under npx, so
- * the platform default wins over an absent $SHELL rather than falling through
- * to bash.
+ * Token savers. These are optional by design: a failure here must never take
+ * the routing install down with it, because the routing is the part that
+ * matters and these only make it cheaper.
  */
-function shellRc() {
-  const shell = process.env.SHELL || '';
-  if (shell.includes('zsh')) return path.join(HOME, '.zshrc');
-  if (shell.includes('bash')) {
-    // macOS bash reads .bash_profile for login shells; Linux uses .bashrc.
-    const bp = path.join(HOME, '.bash_profile');
-    if (process.platform === 'darwin' && fs.existsSync(bp)) return bp;
-    return path.join(HOME, '.bashrc');
-  }
-  if (process.platform === 'darwin') return path.join(HOME, '.zshrc');
+function installTokenSavers() {
+  const installed = [];
 
-  // Unknown shell on Linux: prefer an rc that already exists.
-  for (const name of RC_CANDIDATES) {
-    const p = path.join(HOME, name);
-    if (fs.existsSync(p)) return p;
-  }
-  return path.join(HOME, '.profile');
-}
-
-function installAutostart() {
-  if (IS_WIN) {
-    const startup = path.join(
-      HOME,
-      'AppData',
-      'Roaming',
-      'Microsoft',
-      'Windows',
-      'Start Menu',
-      'Programs',
-      'Startup'
-    );
-    if (!fs.existsSync(startup)) {
-      warn('Startup folder not found — start CCR manually with `ccr start`.');
-      return;
-    }
-    const cmd = path.join(startup, 'ccr-openrouter.cmd');
-    fs.writeFileSync(
-      cmd,
-      [
-        '@echo off',
-        'rem Generated by ccr-openrouter/setup.js — keeps Claude Code Router up',
-        'rem so the Claude Code VSCode extension always has a proxy to talk to.',
-        `"${ccrPath()}" start`,
-        ''
-      ].join('\r\n')
-    );
-    ok(`autostart installed: ${cmd}`);
+  // rtk — a CLI that trims the output of common dev commands before it reaches
+  // the model. Installed only if a source is configured; there is no public
+  // package under a name that is not already taken by something unrelated.
+  const rtkSource = process.env.RTK_INSTALL_URL || null;
+  if (rtkSource) {
+    const res = run('npm', ['install', '-g', rtkSource], { stdio: 'inherit' });
+    if (res.code === 0) installed.push('rtk');
+    else warn('rtk install failed — continuing without it');
+  } else if (run('rtk', ['--version']).code === 0) {
+    installed.push('rtk (already present)');
   } else {
-    const rc = shellRc();
-    const block =
-      `\n${AUTOSTART_BEGIN}\n` +
-      `(pgrep -f claude-code-router >/dev/null 2>&1 || "${ccrPath()}" start >/dev/null 2>&1 &)\n` +
-      `${AUTOSTART_END}\n`;
-    try {
-      const current = fs.existsSync(rc) ? fs.readFileSync(rc, 'utf8') : '';
-      if (current.includes(AUTOSTART_BEGIN)) {
-        ok(`autostart already present in ${rc}`);
-      } else {
-        fs.appendFileSync(rc, block);
-        ok(`autostart appended to ${rc}`);
-      }
-    } catch (err) {
-      warn(`could not write ${rc}: ${err.message} — start CCR manually with \`ccr start\``);
-    }
-  }
-}
-
-/** Remove what installAutostart() added. Both platforms. */
-function removeAutostart() {
-  if (IS_WIN) {
-    const cmd = path.join(
-      HOME, 'AppData', 'Roaming', 'Microsoft', 'Windows',
-      'Start Menu', 'Programs', 'Startup', 'ccr-openrouter.cmd'
-    );
-    try {
-      fs.unlinkSync(cmd);
-      console.log(`removed ${cmd}`);
-    } catch {}
-    return;
+    info('rtk not installed: set RTK_INSTALL_URL to a package or git URL to enable it');
   }
 
-  // Check every rc file, not only the one we would pick today — the user's
-  // shell may have changed since the install.
-  for (const name of RC_CANDIDATES) {
-    const rc = path.join(HOME, name);
-    if (!fs.existsSync(rc)) continue;
-    let text;
-    try {
-      text = fs.readFileSync(rc, 'utf8');
-    } catch {
-      continue;
-    }
-    if (!text.includes(AUTOSTART_BEGIN)) continue;
-
-    const stripped = text.replace(
-      new RegExp(`\\n?${escapeRe(AUTOSTART_BEGIN)}[\\s\\S]*?${escapeRe(AUTOSTART_END)}\\n?`, 'g'),
-      '\n'
-    );
-    try {
-      fs.copyFileSync(rc, `${rc}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`);
-      fs.writeFileSync(rc, stripped);
-      console.log(`removed the autostart block from ${rc}`);
-    } catch (err) {
-      console.log(`could not edit ${rc}: ${err.message} — remove the ccr-openrouter block by hand`);
-    }
-  }
+  return installed;
 }
 
 // ---------------------------------------------------------------------------
-// 7. Start CCR and prove the whole path works
+// Verify
 // ---------------------------------------------------------------------------
 
-async function waitForCcr(timeoutMs = 20000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(BASE_URL, { signal: AbortSignal.timeout(2000) });
-      if (res.status < 500) return true;
-    } catch {}
-    await sleep(500);
-  }
-  return false;
-}
-
-async function verifyRouting(token, expectModel) {
-  const res = await fetch(`${BASE_URL}/v1/messages`, {
+async function verify(key, model) {
+  const res = await fetch(MESSAGES_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': token,
-      authorization: `Bearer ${token}`,
+      authorization: `Bearer ${key}`,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514', // any Anthropic-shaped name; CCR re-routes it
-      max_tokens: 32,
+      model,
+      max_tokens: 16,
       messages: [{ role: 'user', content: 'Reply with the single word: routed' }],
     }),
     signal: AbortSignal.timeout(90000),
   });
-
   const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} from the router — ${text.slice(0, 300)}`);
-  }
-  let reply = '';
+  if (!res.ok) throw new Error(`HTTP ${res.status} — ${text.slice(0, 300)}`);
+  let body;
   try {
-    const body = JSON.parse(text);
-    reply = (body.content || []).map((b) => b.text || '').join('').trim();
+    body = JSON.parse(text);
   } catch {
-    reply = text.slice(0, 120);
+    throw new Error(`response was not JSON: ${text.slice(0, 200)}`);
   }
-  return { reply, expectModel };
+  if (body.type !== 'message') throw new Error(`unexpected response shape: ${text.slice(0, 200)}`);
+  return body;
 }
 
 // ---------------------------------------------------------------------------
-// Modes: --on / --off / --status / --uninstall
+// Modes
 // ---------------------------------------------------------------------------
 
 function modeOff() {
@@ -956,252 +542,225 @@ function modeOff() {
     console.log('Routing is already off.');
     return;
   }
-  const parked = {
-    ANTHROPIC_BASE_URL: s.env.ANTHROPIC_BASE_URL,
-    ANTHROPIC_AUTH_TOKEN: s.env.ANTHROPIC_AUTH_TOKEN,
-    ANTHROPIC_API_KEY: s.env.ANTHROPIC_API_KEY,
-  };
-  delete s.env.ANTHROPIC_BASE_URL;
-  delete s.env.ANTHROPIC_AUTH_TOKEN;
-  delete s.env.ANTHROPIC_API_KEY;
-  if (s.__ccrOpenrouterParkedModel) {
-    s.model = s.__ccrOpenrouterParkedModel;
-    delete s.__ccrOpenrouterParkedModel;
+  const parked = {};
+  for (const k of ROUTING_KEYS) {
+    if (k in s.env) {
+      parked[k] = s.env[k];
+      delete s.env[k];
+    }
+  }
+  if (s.__parkedModel) {
+    s.model = s.__parkedModel;
+    delete s.__parkedModel;
   }
   writeJson(CLAUDE_SETTINGS, s);
   writeJson(STATE_FILE, { off: true, parked, at: new Date().toISOString() });
   console.log(`${C.green}Routing off.${C.reset} Claude Code is back on your Anthropic account.`);
-  console.log(`${C.dim}Restart the CLI, or reload the VSCode window, for it to take effect.${C.reset}`);
+  console.log(`${C.dim}Open a new terminal, or reload the VSCode window.${C.reset}`);
 }
 
 function modeOn() {
   const state = readJson(STATE_FILE, {});
-  const ccr = readJson(CCR_CONFIG, {});
-  const token = (state.parked && state.parked.ANTHROPIC_AUTH_TOKEN) || ccr.APIKEY;
-  if (!token) die('No saved router token — run a full install first (node setup.js).');
+  if (!state.parked || !state.parked.ANTHROPIC_AUTH_TOKEN) {
+    die('Nothing saved to switch back to.', 'Run a full install:  node setup.js --key sk-or-v1-...');
+  }
   const s = readJson(CLAUDE_SETTINGS, {});
-  s.env = { ...(s.env || {}), ...routingEnv(token) };
+  s.env = { ...(s.env || {}), ...state.parked };
   if (s.model) {
-    s.__ccrOpenrouterParkedModel = s.model;
+    s.__parkedModel = s.model;
     delete s.model;
   }
   writeJson(CLAUDE_SETTINGS, s);
-  writeJson(STATE_FILE, { off: false, at: new Date().toISOString() });
-  console.log(`${C.green}Routing on.${C.reset} Restart the CLI / reload the VSCode window.`);
+  writeJson(STATE_FILE, { off: false, parked: state.parked, at: new Date().toISOString() });
+  console.log(`${C.green}Routing on.${C.reset} Open a new terminal, or reload the VSCode window.`);
 }
 
 function modeStatus() {
   const s = readJson(CLAUDE_SETTINGS, {});
-  const ccr = readJson(CCR_CONFIG, {});
-  const router = ccr.Router || {};
-  const on = Boolean(s.env && s.env.ANTHROPIC_BASE_URL);
-  console.log(`${C.bold}Routing:${C.reset}   ${on ? C.green + 'ON → ' + s.env.ANTHROPIC_BASE_URL : C.yellow + 'OFF (using Anthropic directly)'}${C.reset}`);
-  console.log(`${C.bold}default:${C.reset}    ${router.default || '-'}`);
-  console.log(`${C.bold}think:${C.reset}      ${router.think || '-'}`);
-  console.log(`${C.bold}background:${C.reset} ${router.background || '-'}`);
-  console.log(`${C.bold}longContext:${C.reset} ${router.longContext || '-'} (over ${router.longContextThreshold || '-'} tokens)`);
-  console.log(`${C.bold}statusLine:${C.reset} ${(s.statusLine && s.statusLine.command) || '-'}`);
-  const probe = runCcr(['status']);
-  console.log(`${C.bold}ccr:${C.reset}        ${probe.code === 0 ? probe.stdout.split('\n')[0] : C.red + 'not running' + C.reset}`);
+  const env = s.env || {};
+  const on = typeof env.ANTHROPIC_BASE_URL === 'string' && env.ANTHROPIC_BASE_URL.includes('openrouter');
+  const line = (k, v) => console.log(`${C.bold}${(k + ':').padEnd(14)}${C.reset}${v}`);
+
+  line('routing', on ? `${C.green}ON -> ${env.ANTHROPIC_BASE_URL}${C.reset}`
+                     : `${C.yellow}OFF (using your Anthropic account)${C.reset}`);
+  line('default', env.ANTHROPIC_MODEL || '-');
+  line('background', env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '-');
+  line('opus slot', env.ANTHROPIC_DEFAULT_OPUS_MODEL || '-');
+  line('key', env.ANTHROPIC_AUTH_TOKEN ? env.ANTHROPIC_AUTH_TOKEN.slice(0, 12) + '...' : '-');
+  line('statusline', (s.statusLine && s.statusLine.command) || '-');
+  if (env.ANTHROPIC_BASE_URL && /127\.0\.0\.1|localhost/.test(env.ANTHROPIC_BASE_URL)) {
+    console.log(`\n${C.red}This points at a local proxy that this version no longer installs.${C.reset}`);
+    console.log(`Re-run the setup to fix it, or ${C.bold}node setup.js --off${C.reset} to go back to Anthropic.`);
+  }
 }
 
-/**
- * Report the state of everything this script depends on, changing nothing.
- * Intended for pasting into a bug report when an install fails.
- */
 async function modeDoctor() {
   const line = (k, v, good) =>
-    console.log(
-      `${C.bold}${(k + ':').padEnd(16)}${C.reset}` +
-        `${good === undefined ? '' : good ? C.green : C.red}${v}${C.reset}`
-    );
+    console.log(`${C.bold}${(k + ':').padEnd(16)}${C.reset}` +
+      `${good === undefined ? '' : good ? C.green : C.red}${v}${C.reset}`);
 
-  console.log(`${C.bold}ccr-openrouter doctor${C.reset}\n`);
-
+  console.log(`${C.bold}openrouter setup doctor${C.reset}\n`);
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   line('platform', `${process.platform} ${process.arch}`);
   line('node', process.versions.node, nodeMajor >= 18);
-  line('node path', process.execPath);
-
   const npmV = run('npm', ['--version']).stdout;
   line('npm', npmV || 'MISSING', Boolean(npmV));
-  if (npmV) {
-    line('npm prefix', run('npm', ['prefix', '-g']).stdout || 'unknown');
-    line('allow-git', run('npm', ['config', 'get', 'allow-git']).stdout || 'unset');
-    line('allow-scripts', run('npm', ['config', 'get', 'allow-scripts']).stdout || 'unset');
-  }
+  const cc = probeClaude();
+  line('claude code', cc || 'MISSING', Boolean(cc));
 
-  for (const [bin, label] of [['claude', 'Claude Code'], ['ccr', 'Claude Code Router']]) {
-    const p = probeCommand(bin);
-    line(
-      label.toLowerCase().replace(/\s+/g, '-'),
-      p.state === 'ok' ? `${p.version}  (${p.path})` : `${p.state.toUpperCase()}${p.stderr ? ' — ' + p.stderr.split('\n')[0] : ''}`,
-      p.state === 'ok'
-    );
-  }
-
-  for (const [label, file] of [
-    ['ccr config', CCR_CONFIG],
-    ['claude settings', CLAUDE_SETTINGS],
-    ['statusline', STATUSLINE],
-  ]) {
-    line(label, fs.existsSync(file) ? file : 'not present', fs.existsSync(file));
-  }
-
-  let routerUp = false;
-  try {
-    const res = await fetch(BASE_URL, { signal: AbortSignal.timeout(2000) });
-    routerUp = res.status < 500;
-  } catch {}
-  line('router', routerUp ? `listening on ${BASE_URL}` : `nothing on ${BASE_URL}`, routerUp);
+  const s = readJson(CLAUDE_SETTINGS, {});
+  const env = s.env || {};
+  line('settings', fs.existsSync(CLAUDE_SETTINGS) ? CLAUDE_SETTINGS : 'not present', fs.existsSync(CLAUDE_SETTINGS));
+  line('base url', env.ANTHROPIC_BASE_URL || 'unset',
+    Boolean(env.ANTHROPIC_BASE_URL && env.ANTHROPIC_BASE_URL.includes('openrouter')));
+  line('default model', env.ANTHROPIC_MODEL || 'unset', Boolean(env.ANTHROPIC_MODEL));
+  line('statusline', fs.existsSync(STATUSLINE) ? STATUSLINE : 'not present', fs.existsSync(STATUSLINE));
+  line('CLAUDE.md', fs.existsSync(CLAUDE_MD) ? CLAUDE_MD : 'not present', fs.existsSync(CLAUDE_MD));
 
   let net = false;
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/models', {
-      signal: AbortSignal.timeout(15000),
-    });
-    net = res.ok;
+    net = (await fetch(MODELS_URL, { signal: AbortSignal.timeout(15000) })).ok;
   } catch {}
   line('openrouter', net ? 'reachable' : 'UNREACHABLE', net);
+
+  if (env.ANTHROPIC_AUTH_TOKEN) {
+    let auth = 'unknown';
+    let good = false;
+    try {
+      const r = await fetch(`${API_ROOT}/v1/key`, {
+        headers: { Authorization: `Bearer ${env.ANTHROPIC_AUTH_TOKEN}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      auth = r.ok ? 'accepted' : `REJECTED (HTTP ${r.status})`;
+      good = r.ok;
+    } catch (e) {
+      auth = `could not check: ${e.message}`;
+    }
+    line('key', auth, good);
+  }
+
   for (const v of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']) {
     if (process.env[v]) line(v.toLowerCase(), process.env[v]);
   }
-
-  console.log(
-    `\n${C.dim}Paste this into an issue if something is wrong. It contains no keys.${C.reset}`
-  );
+  console.log(`\n${C.dim}Safe to paste into an issue — it prints no keys.${C.reset}`);
 }
 
 function modeUninstall() {
-  let restored = 0;
-  for (const file of [CLAUDE_SETTINGS, CCR_CONFIG]) {
-    const dir = path.dirname(file);
-    const base = path.basename(file);
-    let baks;
+  const baks = (() => {
     try {
-      baks = fs.readdirSync(dir).filter((f) => f.startsWith(base + '.bak.')).sort();
+      return fs.readdirSync(CLAUDE_DIR)
+        .filter((f) => f.startsWith('settings.json.bak.'))
+        .sort();
     } catch {
-      continue;
+      return [];
     }
-    if (baks.length === 0) {
-      warn(`no backup found for ${file}`);
-      continue;
+  })();
+
+  if (baks.length) {
+    const newest = path.join(CLAUDE_DIR, baks[baks.length - 1]);
+    fs.copyFileSync(newest, CLAUDE_SETTINGS);
+    console.log(`restored ${CLAUDE_SETTINGS} from ${baks[baks.length - 1]}`);
+  } else {
+    warn('no settings backup found — removing the routing keys instead');
+    const s = readJson(CLAUDE_SETTINGS, {});
+    if (s.env) for (const k of ROUTING_KEYS) delete s.env[k];
+    if (s.__parkedModel) {
+      s.model = s.__parkedModel;
+      delete s.__parkedModel;
     }
-    const newest = path.join(dir, baks[baks.length - 1]);
-    fs.copyFileSync(newest, file);
-    console.log(`restored ${file} from ${baks[baks.length - 1]}`);
-    restored++;
+    writeJson(CLAUDE_SETTINGS, s);
   }
+
   try {
     fs.unlinkSync(STATUSLINE);
     console.log(`removed ${STATUSLINE}`);
   } catch {}
 
-  // Previously this deleted only the Windows startup file, so on macOS and
-  // Linux the line appended to the shell rc survived an uninstall and kept
-  // starting the router forever.
-  removeAutostart();
-  console.log(restored ? `${C.green}Uninstalled.${C.reset}` : `${C.yellow}Nothing to restore.${C.reset}`);
+  try {
+    const md = fs.readFileSync(CLAUDE_MD, 'utf8');
+    if (md.includes(CLAUDE_MD_BEGIN)) {
+      const re = new RegExp('\\n*' + escapeRe(CLAUDE_MD_BEGIN) + '[\\s\\S]*?' + escapeRe(CLAUDE_MD_END) + '\\n*', 'g');
+      const stripped = md.replace(re, '\n');
+      if (stripped.trim()) fs.writeFileSync(CLAUDE_MD, stripped);
+      else fs.unlinkSync(CLAUDE_MD);
+      console.log(`cleaned ${CLAUDE_MD}`);
+    }
+  } catch {}
+
+  console.log(`${C.green}Uninstalled.${C.reset} Open a new terminal, or reload the VSCode window.`);
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Install
 // ---------------------------------------------------------------------------
 
 async function install() {
-  console.log(`${C.bold}Claude Code → OpenRouter setup${C.reset}\n`);
+  console.log(`${C.bold}Claude Code -> OpenRouter${C.reset}\n`);
 
   say('Checking prerequisites');
   checkNode();
-  checkNpm();
-  ensureNpmPackage('claude', '@anthropic-ai/claude-code', 'Claude Code');
+  ensureClaudeCode();
 
   const key = resolveKey();
 
   say('Resolving models against the live OpenRouter catalogue');
   const catalogue = await fetchCatalogue(key);
-  const a = pickModel(catalogue, WANTED.fast);
-  const b = pickModel(catalogue, WANTED.smart);
+  const first = pickModel(catalogue, WANTED.a);
+  const second = pickModel(catalogue, WANTED.b);
 
-  // Which model is the cheap default and which is the expensive escalation is
-  // decided by their live prices, not by the order they are declared above.
-  // Hardcoding that ranking would silently invert the whole routing table the
-  // day a provider repriced.
-  const [fast, smart] = [a, b].sort((x, y) => blendedPrice(x) - blendedPrice(y));
-
-  for (const [role, m] of [['cheap', fast], ['dear ', smart]]) {
-    const want = m === a ? WANTED.fast : WANTED.smart;
-    const note = m.matchedBy === 'exact' ? '' : ` ${C.yellow}(fuzzy match — wanted ${want.slug})${C.reset}`;
-    ok(
-      `${role} → ${m.id}  ${C.dim}${priceLabel(m)}, ${(m.context_length || 0).toLocaleString()} ctx${C.reset}${note}`
-    );
+  // Cheap vs expensive comes from live prices, not from the order above, so a
+  // reprice cannot silently invert the whole routing table.
+  const [cheap, dear] = [first, second].sort((x, y) => blendedPrice(x) - blendedPrice(y));
+  ok(`cheap -> ${cheap.id}  ${C.dim}${priceLabel(cheap)}${C.reset}`);
+  ok(`dear  -> ${dear.id}  ${C.dim}${priceLabel(dear)}${C.reset}`);
+  for (const m of [first, second]) {
+    if (m.matchedBy === 'fuzzy') warn(`${m.id} was a fuzzy match — the exact slug is gone`);
   }
-  if (blendedPrice(fast) === blendedPrice(smart)) {
-    warn('both models cost the same — keeping the declared order');
-  }
-
-  // The config is written before the router is installed, not after. CCR
-  // refuses to start — including for `--version` — until at least one provider
-  // with a model exists, so probing it on a machine with no config reports a
-  // healthy install as broken.
-  say('Writing the router config');
-  const { token } = writeCcrConfig(key, fast, smart);
-  ok(`${CCR_CONFIG}`);
-  info(`local router token: ${token.slice(0, 12)}… (Claude Code authenticates to CCR with this, not with your OpenRouter key)`);
-
-  say('Installing the router');
-  ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router', [
-    'better-sqlite3',
-  ]);
 
   say('Writing the statusline');
   writeStatusline();
 
-  say('Pointing Claude Code at the router (covers the CLI and the VSCode extension)');
-  writeClaudeSettings(token);
-  ok(`${CLAUDE_SETTINGS} → env.ANTHROPIC_BASE_URL = ${BASE_URL}`);
+  say('Pointing Claude Code at OpenRouter (covers the CLI and the VSCode extension)');
+  writeClaudeSettings(key, cheap.id, dear.id);
+  ok(`${CLAUDE_SETTINGS} -> env.ANTHROPIC_BASE_URL = ${API_ROOT}`);
+  info(`default ${cheap.id} | opus slot ${dear.id}`);
 
-  if (!hasFlag('--no-autostart')) {
-    say('Installing autostart');
-    installAutostart();
-  }
+  if (!hasFlag('--no-extras')) {
+    say('Writing plain-language instructions');
+    writeClaudeMd();
 
-  say('Starting the router');
-  runCcr(['restart']);
-  const up = await waitForCcr();
-  if (!up) {
-    die(
-      `CCR did not come up on ${BASE_URL} within 20s.`,
-      'Run `ccr start` in a terminal and read the error it prints.'
-    );
+    say('Token savers');
+    const savers = installTokenSavers();
+    if (savers.length) ok(savers.join(', '));
   }
-  ok(`router listening on ${BASE_URL}`);
 
   if (!hasFlag('--no-verify')) {
-    say('Verifying end to end (one real request through OpenRouter)');
+    say('Verifying with one real request');
     try {
-      const { reply } = await verifyRouting(token, fast.id);
-      ok(`round trip succeeded — model replied: ${JSON.stringify(reply.slice(0, 60))}`);
+      const body = await verify(key, cheap.id);
+      const said = (body.content || []).map((b) => b.text || '').join('').trim();
+      ok(`${body.model} replied${said ? `: ${JSON.stringify(said.slice(0, 40))}` : ' (thinking-only, still a success)'}`);
+      if (body.usage) info(`billed ${body.usage.input_tokens} in / ${body.usage.output_tokens} out`);
     } catch (err) {
       warn(`verification failed: ${err.message}`);
-      warn('Config is written; fix the error above, then `ccr restart` and re-run with --no-verify skipped.');
+      warn('Settings are written. Fix the error above and run --doctor.');
     }
   }
 
   console.log(`\n${C.green}${C.bold}Done.${C.reset}\n`);
   console.log(`  ${C.bold}CLI:${C.reset}     open a NEW terminal and run  ${C.cyan}claude${C.reset}`);
-  console.log(`  ${C.bold}VSCode:${C.reset}  reload the window (Ctrl+Shift+P → "Developer: Reload Window")\n`);
-  console.log(`  default / background : ${fast.id}`);
-  console.log(`  think / longContext  : ${smart.id}`);
-  console.log(`  switch mid-session   : /model openrouter,${smart.id}`);
-  console.log(`  back to Anthropic    : node setup.js --off\n`);
-  console.log(`  ${C.dim}Claude Code's top header still says "Sonnet" — that string is hardcoded.`);
-  console.log(`  The bottom statusline is the truthful one: it shows the routed model and reasoning effort.${C.reset}`);
+  console.log(`  ${C.bold}VSCode:${C.reset}  reload the window (Ctrl+Shift+P -> "Developer: Reload Window")\n`);
+  console.log(`  everyday model : ${cheap.id}`);
+  console.log(`  when you need more: ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
+  console.log(`  back to Anthropic : node setup.js --off\n`);
+  console.log(`  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
 }
+
+// ---------------------------------------------------------------------------
 
 (async () => {
   if (hasFlag('--help') || hasFlag('-h')) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*|^ \* ?/gm, ''));
+    console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*|^ \* ?|^ \*/gm, ''));
     return;
   }
   if (hasFlag('--doctor')) return modeDoctor();

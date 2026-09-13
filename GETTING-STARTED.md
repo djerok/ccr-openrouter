@@ -18,12 +18,13 @@ per use.
 Three pieces are involved:
 
 ```
-  Claude Code  ──►  Claude Code Router  ──►  OpenRouter  ──►  the actual model
-  (what you type)   (runs on your PC,        (a website that   (DeepSeek, GLM, …)
-                     translates)              resells models)
+  Claude Code  ──►  OpenRouter  ──►  the actual model
+  (what you type)   (a website that   (DeepSeek, GLM, …)
+                     resells models)
 ```
 
-`setup.js` installs and connects all three.
+That is the whole thing. Nothing runs in the background. `setup.js` tells Claude Code to
+send its questions to OpenRouter instead of to Anthropic, and that is all it does.
 
 ---
 
@@ -152,11 +153,10 @@ The first time it may ask `Ok to proceed? (y)` — type `y` and press `Enter`.
 This takes a few minutes. It prints numbered steps as it goes. It will:
 
 1. check your Node version
-2. install Claude Code and Claude Code Router (this is the slow part)
+2. install Claude Code if you do not have it (this is the slow part)
 3. look up the models on OpenRouter to make sure they still exist
-4. write its configuration files, backing up anything already there
-5. start the router
-6. **send one real test message** and show you the reply
+4. write its settings file, backing up anything already there
+5. **send one real test message** and show you the reply
 
 Success looks like this at the end:
 
@@ -186,13 +186,13 @@ The first time, Claude Code may ask you to pick a theme and accept its terms. Sa
 Type a question and press `Enter`. At the bottom of the screen you will see a line like:
 
 ```
-● deepseek-v4-flash-0731 (default) │ ⚙ high │ 📁 ccr-openrouter │ ⎇ main │ $0.0002
+● deepseek-v4-flash-0731 (cheap) | high | ccr-openrouter | main | $0.0002
 ```
 
 That is the statusline, and it is telling you the truth about which model answered.
 
-> **The top of the screen will say "Sonnet".** That text is hardcoded into Claude Code and
-> does not mean the setup failed. Trust the bottom line, not the top.
+> **The top of the screen may still show a Claude name.** That part of the screen is not
+> controlled by these settings. Trust the bottom line, not the top.
 
 To leave, type `/exit` or press `Ctrl`+`C` twice.
 
@@ -227,11 +227,14 @@ npx --allow-git=root github:djerok/ccr-openrouter --uninstall   # undo everythin
 
 After `--off` or `--on`, open a new terminal / reload VSCode for it to take effect.
 
-To change model in the middle of a conversation, type this into Claude Code:
+Two models are set up. The cheap one answers everything. When you want the stronger one,
+type this inside Claude Code:
 
 ```
-/model openrouter,z-ai/glm-5.3-flash
+/model opus
 ```
+
+That switches to GLM. `/model sonnet` puts you back on the cheap one.
 
 ---
 
@@ -241,19 +244,10 @@ To change model in the middle of a conversation, type this into Claude Code:
 |---|---|---|
 | `'node' is not recognized` / `command not found: node` | Node is not installed, or the terminal was open before you installed it | Close the terminal, open a new one, try again. Still failing → redo Step 2 |
 | `Node vX is too old` | Node is installed but below version 18 | Install the LTS version from <https://nodejs.org> |
-| `No OpenRouter API key.` | You forgot `--key`, or pasted it wrong | Re-run with `--key sk-or-v1-...`. The key has no spaces and no quotes around it |
 | `npx` asks `Ok to proceed? (y)` | Normal — it is confirming the download | Type `y`, press `Enter` |
-| `npm error 404 ... github:djerok` | Typo in the command, or no internet | Check the spelling of `github:djerok/ccr-openrouter` |
 | `npm error code EALLOWGIT` | You left out `--allow-git=root` | Re-run with the full command exactly as written above |
 | `npm warn invalid config allow-git` | Your npm is older and does not know the flag | Harmless — it still ran. Ignore it |
-| `OpenRouter rejected the key (401)` | Wrong key, deleted key, or **no credit on the account** | Check <https://openrouter.ai/keys> and <https://openrouter.ai/settings/credits> |
 | `npm install -g ... failed` on Windows | No permission to write to the global folder | Right-click PowerShell → **Run as Administrator**, then re-run the setup |
-| `npm install -g ... failed` on macOS/Linux | Same, permissions | `sudo npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router`, then re-run the setup |
-| `Claude Code Router is installed ... but crashes when run` | A native module (`better-sqlite3`) was not built, because npm 12 blocks install scripts by default | The setup now retries this for you. If it still fails, run `npm install -g --allow-scripts=better-sqlite3 @musistudio/claude-code-router`, then re-run the setup |
-| `npm warn allow-scripts ... better-sqlite3` during install | Expected on npm 12 | Not an error. The setup re-installs with that script enabled if the router turns out to be broken |
-| `"ccr" is not runnable` | The global npm bin folder is not on your PATH | The message prints the folder. Add it to PATH, open a new terminal, re-run |
-| `CCR did not come up ... within 20s` | The router failed to start | Run `ccr start` on its own and read the error it prints. Something else may already be using port 3456 |
-| Claude Code says it cannot connect | The router is not running | Run `ccr start`. It should start automatically from now on — the setup added it to your system startup |
 | The statusline is blank or garbled | Your terminal cannot draw the symbols | Harmless. Windows users: use **Windows Terminal** rather than the old console window |
 | The header says "Sonnet" | Expected | Hardcoded in Claude Code. The bottom statusline is the real one |
 
@@ -287,21 +281,14 @@ Everything above works on all three. This is the same information collected in o
 | Fix `npm -g` permission errors | reopen PowerShell as **Administrator** | prefix with `sudo` | prefix with `sudo` |
 | Your home folder (`~`) | `C:\Users\YourName` | `/Users/YourName` | `/home/yourname` |
 | VSCode reload | `Ctrl`+`Shift`+`P` → Developer: Reload Window | `Cmd`+`Shift`+`P` → same | `Ctrl`+`Shift`+`P` → same |
-| Where autostart goes | a `.cmd` file in your Startup folder | a marked block in `~/.zshrc` | a marked block in whichever rc your shell reads |
-| When autostart kicks in | when you log in to Windows | when you open a terminal | when you open a terminal |
 | Stop Claude Code | `Ctrl`+`C` twice, or `/exit` | `Ctrl`+`C` twice, or `/exit` | `Ctrl`+`C` twice, or `/exit` |
 
-**One difference that matters.** On Windows the router starts when you log in, so VSCode
-always finds it. On macOS and Linux it starts when you open a terminal — so if you launch
-VSCode straight from the dock after a reboot without ever opening a terminal, the extension
-may report that it cannot connect. Fix it by opening a terminal once (that starts the
-router), then reloading the VSCode window. To check at any time:
+**No background service.** Nothing has to be running for this to work, on any of the three
+systems. If something looks wrong, ask the setup to check itself:
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --status
+npx --allow-git=root github:djerok/ccr-openrouter --doctor
 ```
-
-The last line tells you whether the router is running.
 
 ---
 
@@ -309,9 +296,6 @@ The last line tells you whether the router is running.
 
 | File | Purpose |
 |---|---|
-| `~/.claude-code-router/config.json` | Which models, and your OpenRouter key |
-| `~/.claude/settings.json` | Tells Claude Code to use the router — this is what covers both the terminal and VSCode |
-| `~/.claude/statusline-openrouter.js` | The statusline at the bottom of the screen |
 | `<file>.bak.<timestamp>` | A backup of anything the setup replaced |
 
 `~` means your home folder: `C:\Users\YourName` on Windows, `/Users/YourName` on macOS,
@@ -319,7 +303,7 @@ The last line tells you whether the router is running.
 
 ## One safety note
 
-Your OpenRouter key is stored in `~/.claude-code-router/config.json` on your own computer.
+Your OpenRouter key is stored in `~/.claude/settings.json` on your own computer.
 That is normal — it has to live somewhere for the router to use it. But:
 
 - **Never** paste that file, or your key, into a chat, a screenshot, or a GitHub issue.

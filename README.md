@@ -1,170 +1,153 @@
 # ccr-openrouter
 
-One command points a fresh [Claude Code](https://github.com/anthropics/claude-code) install —
-**CLI and VSCode extension** — at OpenRouter models, and gives you a statusline that tells
-you which model actually answered.
+Point Claude Code — the CLI **and** the VSCode extension — at OpenRouter models.
 
 ```sh
 npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...
 ```
 
-That is the whole install — no clone, no download, nothing to keep, and no `git` needed.
+Node >= 18, no npm dependencies, Windows / macOS / Linux.
 
-`--allow-git=root` is required on **npm 12 and newer**, where fetching git-backed packages is
-off by default (`allow-git` defaults to `none`); without it you get `npm error code EALLOWGIT`.
-`root` permits only the package you named on the command line and still blocks git-backed
-*dependencies*, which is the part that setting exists to protect you from. On older npm the
-flag is ignored with a warning, so the same line works everywhere.
-
-If you would rather read the code before running it — reasonable, and this is a script that
-edits your config — clone the repo and run `node setup.js --key ...` instead. Identical.
-
-No npm dependencies. Node >= 18. Windows, macOS, Linux.
-
-**No Node on the machine?** The command above cannot help you — it *is* a Node program.
-Use the bootstrapper instead, which installs Node first and then runs the setup:
+**No Node yet?** The line above is itself a Node program, so use a bootstrapper:
 
 ```powershell
-# Windows (PowerShell)
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-...
 ```
-
 ```sh
-# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
 ```
 
-**New to this?** → **[GETTING-STARTED.md](GETTING-STARTED.md)** walks through it from a
-machine with nothing installed: opening a terminal, installing Node, getting an OpenRouter
-key, and what to do when a step fails. Windows, macOS and Linux side by side.
+New to all of this? → **[GETTING-STARTED.md](GETTING-STARTED.md)**, written from a blank machine.
 
-**Something broken?** `--doctor` reports the state of everything involved and changes
-nothing. It prints no keys, so it is safe to paste into an issue.
+## How it works
 
-## Why
+OpenRouter serves the **Anthropic Messages API natively** at
+`https://openrouter.ai/api/v1/messages`. Claude Code already speaks that. So the whole
+integration is a handful of environment variables in `~/.claude/settings.json`:
 
-Claude Code speaks the Anthropic API. [Claude Code Router](https://github.com/musistudio/claude-code-router)
-(CCR) translates that to any OpenAI-compatible provider. Wiring the two up by hand means
-editing two JSON files, guessing model slugs, and discovering in the VSCode extension that
-your shell aliases never applied there. This script does the whole thing and then proves it
-works with a real request.
+```jsonc
+"env": {
+  "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+  "ANTHROPIC_AUTH_TOKEN": "sk-or-v1-...",
+  "ANTHROPIC_MODEL": "deepseek/deepseek-v4-flash-0731",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "z-ai/glm-5.3-flash"
+}
+```
 
-Default routing:
+**There is no proxy, no daemon, no port and nothing to keep running.**
 
-| route | model | why |
+Claude Code applies its `env` block to every session it starts, which is why one file
+covers the terminal and the VSCode extension. Shell aliases — the usual advice — silently
+miss the extension.
+
+> **Earlier versions of this routed through [Claude Code Router](https://github.com/musistudio/claude-code-router).**
+> That meant a native SQLite dependency, a background service, a port, and an autostart
+> entry, and every one of those was a way for the install to fail on someone's machine.
+> CCR 3.x also moved its config into a SQLite database, so the JSON config written by older
+> versions of this script stopped being read at all. None of it was needed. The repo keeps
+> its name; the proxy is gone.
+
+## Models
+
+| slot | model | when |
 |---|---|---|
-| `default`, `background` | `deepseek/deepseek-v4-flash-0731` | the cheap one — everything lands here |
-| `think`, `longContext` | `z-ai/glm-5.3-flash` | the expensive one — only when you ask it to think, or the context gets big |
+| default, background | `deepseek/deepseek-v4-flash-0731` | everything |
+| opus slot | `z-ai/glm-5.3-flash` | `/model opus`, when you want more |
 
-At the time of writing that is $0.04/M in against $0.15/M in, a 3.75x difference, so the
-split is worth having.
+At the time of writing that is $0.04/M in versus $0.15/M in.
 
-**Which model gets which role is decided at install time from live prices, not hardcoded.**
-The cheaper of the two becomes `default` and `background`; the pricier becomes `think` and
-`longContext`. If a provider reprices, the roles follow instead of silently inverting. The
-setup prints both prices so you can see what it chose.
+**Which model is "cheap" is decided at install time from live prices, not hardcoded.** The
+cheaper becomes the default; the pricier becomes the opus slot. If a provider reprices, the
+roles follow instead of inverting. Both prices are printed so you can see the choice.
 
-Change the `WANTED` table at the top of `setup.js` for anything else on OpenRouter — the
-price ranking applies to whatever you put there.
+Edit the `WANTED` table at the top of `setup.js` for different models.
 
 ### Caching
 
-Automatic for both, no configuration. Per OpenRouter's docs, *"Prompt caching with DeepSeek
-is automated and does not require any additional configuration"*, and the same for Z.AI.
-DeepSeek cache reads bill at 0.1x input; Z.AI cache writes are free and reads are
-discounted. You do not need to set `cache_control` anywhere — that is only required for
-Anthropic and Qwen models, which this does not route to.
+Automatic, nothing to configure. Per OpenRouter's docs, *"Prompt caching with DeepSeek is
+automated and does not require any additional configuration"* — same for Z.AI. DeepSeek
+cache reads bill at 0.1x input; Z.AI cache writes are free. `cache_control` breakpoints are
+only needed for Anthropic and Qwen models, which this never routes to.
 
-## What it does
+## What the installer does
 
-1. Installs `@anthropic-ai/claude-code` and `@musistudio/claude-code-router` if they are missing.
-2. Resolves the model slugs against the **live** `https://openrouter.ai/api/v1/models`
-   catalogue. A renamed or retired model fails loudly at install time instead of 404-ing on
-   your first prompt; if the exact slug is gone it falls back to the highest-context model
-   matching the same terms and says so.
-3. Writes `~/.claude-code-router/config.json` — the provider, the routing table, and a
-   locally generated token so the proxy is not an open relay on your machine.
-4. Writes `~/.claude/settings.json` → `env.ANTHROPIC_BASE_URL = http://127.0.0.1:3456`.
+1. Installs Claude Code if it is missing.
+2. Resolves both model slugs against the **live** catalogue, so a retired model fails at
+   install time instead of on your first prompt.
+3. Ranks them by price and assigns the slots.
+4. Writes `~/.claude/settings.json` (backing up whatever was there).
+5. Writes a statusline that names the model actually in use.
+6. Writes a plain-language `~/.claude/CLAUDE.md` — see below.
+7. Sends one real request and shows you the reply. A config that writes but does not work
+   is a failed install, and you should learn that now.
 
-   **This one setting is what covers both surfaces.** Claude Code applies its `env` block to
-   every session it starts, so the VSCode extension inherits it with no VSCode-specific
-   config and no shell aliases. Aliases are the usual advice and they silently miss the
-   extension.
-5. Installs a statusline that reports the routed model and the reasoning effort.
-6. Installs an autostart entry, because the VSCode extension fails cold if the router is not
-   already listening when the window opens.
-7. Starts the router and sends one real request through it. A config that writes but does
-   not route is a failed install, and you should find that out now rather than mid-task.
+## Plain-language mode
 
-Every file it touches is copied to `<file>.bak.<timestamp>` first.
+The installer writes `~/.claude/CLAUDE.md` telling Claude to answer like it is explaining to
+a smart 10-year-old: small words, short sentences, answer first, exact commands rather than
+paragraphs about commands. It goes in a marked block, so an existing `CLAUDE.md` is appended
+to rather than overwritten, and `--uninstall` removes only that block.
 
-## Statusline
-
-```
-● deepseek-v4-flash-0731 (default) │ ⚙ high │ 📁 my-project │ ⎇ main │ $0.0031
-```
-
-- green `●` — model read from a recent routing decision in the CCR log, i.e. what really ran
-- yellow `●` — no fresh log entry, so it is showing the configured route for that slot instead
-- `⚙` — the reasoning effort CCR last sent upstream, falling back to your `effortLevel` setting
-
-Claude Code's **top header will still say "Sonnet"**. That string is hardcoded in Claude Code
-and is not a sign that anything is broken. The bottom statusline is the truthful one.
+Skip it with `--no-extras`.
 
 ## Modes
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...   # install
-npx --allow-git=root github:djerok/ccr-openrouter --status             # what is routed where, is the router up
-npx --allow-git=root github:djerok/ccr-openrouter --off                # back to your Anthropic account
-npx --allow-git=root github:djerok/ccr-openrouter --on                 # re-enable routing
-npx --allow-git=root github:djerok/ccr-openrouter --uninstall          # restore backups, remove statusline + autostart
-npx --allow-git=root github:djerok/ccr-openrouter --no-autostart       # skip the OS startup entry
-npx --allow-git=root github:djerok/ccr-openrouter --no-verify          # skip the live round-trip test
-npx --allow-git=root github:djerok/ccr-openrouter --doctor             # diagnose the environment, change nothing
+npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...  # install
+npx --allow-git=root github:djerok/ccr-openrouter --status            # what is configured
+npx --allow-git=root github:djerok/ccr-openrouter --doctor            # diagnose, change nothing
+npx --allow-git=root github:djerok/ccr-openrouter --off               # back to your Anthropic account
+npx --allow-git=root github:djerok/ccr-openrouter --on                # back to OpenRouter
+npx --allow-git=root github:djerok/ccr-openrouter --uninstall         # restore the newest backup
+npx --allow-git=root github:djerok/ccr-openrouter --no-verify         # skip the live test
+npx --allow-git=root github:djerok/ccr-openrouter --no-extras         # skip CLAUDE.md and token savers
 ```
 
-From a clone, swap `npx --allow-git=root github:djerok/ccr-openrouter` for `node setup.js` in any of the above.
+From a clone, use `node setup.js` in place of the `npx` part.
 
-Key precedence: `--key` → `$OPENROUTER_API_KEY` → the key already in your CCR config.
-There is no baked-in default, on purpose.
+`--allow-git=root` is needed on npm 11+, where git-backed packages are blocked by default
+(`EALLOWGIT`). `root` allows only the package you named and still blocks git-backed
+dependencies. Older npm ignores the flag with a warning.
 
-## After installing
+Key precedence: `--key` → `$OPENROUTER_API_KEY` → the key already in your settings.
+No key is baked into the script.
 
-- **CLI** — open a *new* terminal, run `claude`.
-- **VSCode** — reload the window (`Ctrl+Shift+P` → Developer: Reload Window).
-- Switch model mid-session: `/model openrouter,z-ai/glm-5.3-flash`
+## Statusline
+
+```
+● deepseek-v4-flash-0731 (cheap) | ⚙ high | my-project | main | $0.0031
+```
+
+Green dot means routed to OpenRouter, yellow means you are on your Anthropic account.
+`cheap` / `dear` tells you which slot answered.
+
+Claude Code's **top header may still say a Claude model name** — that part of the UI is not
+driven by these variables. The bottom statusline is the one to trust.
 
 ## When the machine fights back
 
-The setup is written on the assumption that the environment is broken, because on a fresh
-machine it usually is.
-
 | Situation | What happens |
 |---|---|
-| No Node at all | The `npx` line cannot run. Use a bootstrapper above — it installs Node, then runs the setup |
-| Node older than 18 | Refused up front with the version it found. The bootstrappers upgrade it |
-| Node installed but the terminal cannot see it | The PowerShell bootstrapper rebuilds `PATH` in-process, so no reopening is needed |
-| `npm` missing although Node is present | Caught before anything is installed, with the per-platform fix |
-| Package installs but the binary crashes | Distinguished from "not installed", repaired once automatically, and if it still fails the program's own stderr is quoted |
-| Global bin not on `PATH` | The binary is located through `npm prefix -g` and invoked by absolute path instead |
-| npm 12 blocking native build scripts | Installs pass `--allow-scripts` for the packages that need it |
-| A proxy returning an HTML error page instead of a file | Downloads are checked by size and content, not by exit code |
-| Model renamed or retired on OpenRouter | Caught at install time against the live catalogue, not on your first prompt |
-| No credit on the OpenRouter account | The key check reports the 401 plainly rather than failing later inside Claude Code |
+| No Node at all | Use a bootstrapper above; it installs Node first |
+| Node older than 18 | Refused up front, with the version it found |
+| Node installed but invisible to the shell | `install.ps1` rebuilds `PATH` in-process |
+| `npm` missing though Node is present | Caught before anything installs |
+| Claude Code installed but not on `PATH` | Located via `npm prefix -g` and run by absolute path |
+| A proxy serving an HTML error page | Downloads checked by size and content, not exit code |
+| Model retired or renamed | Caught against the live catalogue at install time |
+| No credit on the account | The 401 is reported plainly, not left to surface later |
+| Old install still pointing at `127.0.0.1` | Detected and replaced, and `--status` warns about it |
 
-Installer exit codes are trusted nowhere. `winget` in particular reports success while
-installing nothing, so every step is verified by running the program and reading its output.
+Installer exit codes are trusted nowhere — `winget` reports success while installing
+nothing, so every step is verified by running the program and reading its output.
 
 ## Notes
 
-- Your OpenRouter key is written to `~/.claude-code-router/config.json`, which this script
-  creates with `0600`. Claude Code itself never sees it — it authenticates to the local
-  router with a separate generated token.
-- If you already had other CCR providers configured, they are preserved; only the
-  `openrouter` provider and the routing table are replaced.
-- Your Claude subscription and this are mutually exclusive per session — `--off` and `--on`
-  flip between them without losing either config.
+- Your OpenRouter key is written to `~/.claude/settings.json`, created with `0600`.
+- `--off` and `--on` flip between OpenRouter and your Anthropic account without losing
+  either configuration.
+- `--uninstall` restores the newest settings backup and removes the statusline and the
+  `CLAUDE.md` block.
 
 ## Licence
 
