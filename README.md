@@ -5,12 +5,19 @@ One command points a fresh [Claude Code](https://github.com/anthropics/claude-co
 you which model actually answered.
 
 ```sh
-npx github:djerok/ccr-openrouter --key sk-or-v1-...
+npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...
 ```
 
-That is the whole install — no clone, no download, nothing to keep. `npx` fetches and runs
-it. If you would rather read the code first, clone the repo and run `node setup.js --key ...`
-instead; they are identical.
+That is the whole install — no clone, no download, nothing to keep, and no `git` needed.
+
+`--allow-git=root` is required on **npm 12 and newer**, where fetching git-backed packages is
+off by default (`allow-git` defaults to `none`); without it you get `npm error code EALLOWGIT`.
+`root` permits only the package you named on the command line and still blocks git-backed
+*dependencies*, which is the part that setting exists to protect you from. On older npm the
+flag is ignored with a warning, so the same line works everywhere.
+
+If you would rather read the code before running it — reasonable, and this is a script that
+edits your config — clone the repo and run `node setup.js --key ...` instead. Identical.
 
 No npm dependencies. Node >= 18. Windows, macOS, Linux.
 
@@ -74,16 +81,16 @@ and is not a sign that anything is broken. The bottom statusline is the truthful
 ## Modes
 
 ```sh
-npx github:djerok/ccr-openrouter --key sk-or-v1-...   # install
-npx github:djerok/ccr-openrouter --status             # what is routed where, is the router up
-npx github:djerok/ccr-openrouter --off                # back to your Anthropic account
-npx github:djerok/ccr-openrouter --on                 # re-enable routing
-npx github:djerok/ccr-openrouter --uninstall          # restore backups, remove statusline + autostart
-npx github:djerok/ccr-openrouter --no-autostart       # skip the OS startup entry
-npx github:djerok/ccr-openrouter --no-verify          # skip the live round-trip test
+npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...   # install
+npx --allow-git=root github:djerok/ccr-openrouter --status             # what is routed where, is the router up
+npx --allow-git=root github:djerok/ccr-openrouter --off                # back to your Anthropic account
+npx --allow-git=root github:djerok/ccr-openrouter --on                 # re-enable routing
+npx --allow-git=root github:djerok/ccr-openrouter --uninstall          # restore backups, remove statusline + autostart
+npx --allow-git=root github:djerok/ccr-openrouter --no-autostart       # skip the OS startup entry
+npx --allow-git=root github:djerok/ccr-openrouter --no-verify          # skip the live round-trip test
 ```
 
-From a clone, swap `npx github:djerok/ccr-openrouter` for `node setup.js` in any of the above.
+From a clone, swap `npx --allow-git=root github:djerok/ccr-openrouter` for `node setup.js` in any of the above.
 
 Key precedence: `--key` → `$OPENROUTER_API_KEY` → the key already in your CCR config.
 There is no baked-in default, on purpose.

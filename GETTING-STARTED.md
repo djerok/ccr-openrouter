@@ -116,11 +116,16 @@ There is nothing to download. Replace `sk-or-v1-YOUR-KEY-HERE` with the key you 
 Step 3, then paste this and press `Enter`:
 
 ```sh
-npx github:djerok/ccr-openrouter --key sk-or-v1-YOUR-KEY-HERE
+npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-YOUR-KEY-HERE
 ```
 
 `npx` comes with Node, and fetches the program straight from GitHub each time you run it.
 The first time it may ask `Ok to proceed? (y)` — type `y` and press `Enter`.
+
+> **Why the `--allow-git=root` part?** Newer versions of npm refuse to fetch anything from a
+> git host unless you say so. That flag says "the one thing I named is fine" — it does not
+> switch the protection off for anything else. Leave it in. On older npm it is harmlessly
+> ignored.
 
 This takes a few minutes. It prints numbered steps as it goes. It will:
 
@@ -192,10 +197,10 @@ does, which is why one setup covered both.
 Same shape as the install — `npx` again, from any folder:
 
 ```sh
-npx github:djerok/ccr-openrouter --status      # what is routed where, is the router running
-npx github:djerok/ccr-openrouter --off         # switch back to your normal Anthropic account
-npx github:djerok/ccr-openrouter --on          # switch back to OpenRouter
-npx github:djerok/ccr-openrouter --uninstall   # undo everything, restore your original settings
+npx --allow-git=root github:djerok/ccr-openrouter --status      # what is routed where, is the router running
+npx --allow-git=root github:djerok/ccr-openrouter --off         # switch back to your normal Anthropic account
+npx --allow-git=root github:djerok/ccr-openrouter --on          # switch back to OpenRouter
+npx --allow-git=root github:djerok/ccr-openrouter --uninstall   # undo everything, restore your original settings
 ```
 
 After `--off` or `--on`, open a new terminal / reload VSCode for it to take effect.
@@ -217,6 +222,8 @@ To change model in the middle of a conversation, type this into Claude Code:
 | `No OpenRouter API key.` | You forgot `--key`, or pasted it wrong | Re-run with `--key sk-or-v1-...`. The key has no spaces and no quotes around it |
 | `npx` asks `Ok to proceed? (y)` | Normal — it is confirming the download | Type `y`, press `Enter` |
 | `npm error 404 ... github:djerok` | Typo in the command, or no internet | Check the spelling of `github:djerok/ccr-openrouter` |
+| `npm error code EALLOWGIT` | You left out `--allow-git=root` | Re-run with the full command exactly as written above |
+| `npm warn invalid config allow-git` | Your npm is older and does not know the flag | Harmless — it still ran. Ignore it |
 | `OpenRouter rejected the key (401)` | Wrong key, deleted key, or **no credit on the account** | Check <https://openrouter.ai/keys> and <https://openrouter.ai/settings/credits> |
 | `npm install -g ... failed` on Windows | No permission to write to the global folder | Right-click PowerShell → **Run as Administrator**, then re-run the setup |
 | `npm install -g ... failed` on macOS/Linux | Same, permissions | `sudo npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router`, then re-run the setup |
@@ -256,7 +263,7 @@ may report that it cannot connect. Fix it by opening a terminal once (that start
 router), then reloading the VSCode window. To check at any time:
 
 ```sh
-npx github:djerok/ccr-openrouter --status
+npx --allow-git=root github:djerok/ccr-openrouter --status
 ```
 
 The last line tells you whether the router is running.
