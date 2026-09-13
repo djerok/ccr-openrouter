@@ -611,9 +611,14 @@ async function runCheck() {
 
   log('update available: ' + String(state.sha).slice(0, 7) + ' -> ' + sha.slice(0, 7));
 
+  // Pinned to the commit, not to /main/. The branch URL is served from a CDN
+  // that lags behind the API by minutes, so downloading it can fetch the
+  // previous file while recording the new sha — installing stale code and never
+  // retrying, because the versions then look equal. A commit URL is immutable.
+  const url = 'https://raw.githubusercontent.com/' + REPO + '/' + sha + '/setup.js';
   let code;
   try {
-    const res = await fetch(RAW_BASE + '/setup.js', { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!res.ok) return log('download failed: HTTP ' + res.status);
     code = await res.text();
   } catch (err) {
