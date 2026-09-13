@@ -778,7 +778,15 @@ function modeTrim() {
     return;
   }
 
-  const keep = hasFlag('--none') ? [] : argv.filter((a) => !a.startsWith('--'));
+  // Positional arguments name the servers to keep — but --key takes a value,
+  // and without this the key itself is read as a server name and the command
+  // dies with "No such MCP server: sk-or-v1-...".
+  const VALUE_FLAGS = ['--key'];
+  const positional = argv.filter((a, i) => {
+    if (a.startsWith('--')) return false;
+    return !VALUE_FLAGS.includes(argv[i - 1]);
+  });
+  const keep = hasFlag('--none') ? [] : positional;
   if (!keep.length && !hasFlag('--none')) {
     console.log(`${C.bold}MCP servers currently enabled${C.reset}
 `);
@@ -1176,7 +1184,12 @@ async function runCheck() {
   }
 
   await new Promise((resolve) => {
-    const child = spawn(process.execPath, [tmp, '--no-verify', '--no-launch', '--quiet'], {
+    // Replay the options this machine was installed with. Without them the
+    // update quietly reinstalls the defaults, undoing --reliable, --extras and
+    // --usagelog on a machine whose owner explicitly asked for them.
+    const saved = Array.isArray(state.options) ? state.options.filter((f) => /^--[a-z-]+$/.test(f)) : [];
+    const args = [tmp, '--no-verify', '--no-launch', '--quiet'].concat(saved);
+    const child = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -1262,6 +1275,9 @@ function installAutoupdate(settings, sha) {
   state.sha = sha || state.sha || null;
   state.outdated = false;
   state.lastCheck = Date.now();
+  // Remember the choices, so an unattended update reapplies them instead of
+  // resetting the machine to defaults.
+  state.options = ['--reliable', '--cheap', '--extras', '--efficient', '--usagelog'].filter(hasFlag);
   writeJson(STATE_FILE, state);
 
   ok(`auto-update installed${sha ? ` (pinned at ${sha.slice(0, 7)})` : ''}`);
@@ -1531,10 +1547,30 @@ function modeUninstall() {
     }
   })();
 
-  if (baks.length) {
-    const newest = path.join(CLAUDE_DIR, baks[baks.length - 1]);
-    fs.copyFileSync(newest, CLAUDE_SETTINGS);
-    console.log(`restored ${CLAUDE_SETTINGS} from ${baks[baks.length - 1]}`);
+  // Every install writes a backup, so after installing twice the newest backup
+  // is itself a routed configuration and restoring it leaves the machine
+  // exactly where it started. Restore the newest backup that is NOT routed.
+  const clean = baks
+    .slice()
+    .reverse()
+    .find((f) => {
+      const cfg = readJson(path.join(CLAUDE_DIR, f), {});
+      const url = (cfg.env || {}).ANTHROPIC_BASE_URL || '';
+      return !/openrouter|127\.0\.0\.1|localhost/.test(url);
+    });
+
+  if (clean) {
+    fs.copyFileSync(path.join(CLAUDE_DIR, clean), CLAUDE_SETTINGS);
+    console.log(`restored ${CLAUDE_SETTINGS} from ${clean}`);
+  } else if (baks.length) {
+    warn('every backup is itself routed — removing the routing keys instead');
+    const s2 = readJson(CLAUDE_SETTINGS, {});
+    if (s2.env) for (const k of ROUTING_KEYS) delete s2.env[k];
+    if (s2.__parkedModel) {
+      s2.model = s2.__parkedModel;
+      delete s2.__parkedModel;
+    }
+    writeJson(CLAUDE_SETTINGS, s2);
   } else {
     warn('no settings backup found — removing the routing keys instead');
     const s = readJson(CLAUDE_SETTINGS, {});
