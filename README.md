@@ -119,6 +119,89 @@ only needed for Anthropic and Qwen models, which this never routes to.
 7. Sends one real request and shows you the reply. A config that writes but does not work
    is a failed install, and you should learn that now.
 
+## Manual setup, without the script
+
+Everything the installer does to route Claude Code is a block of environment variables. If
+you would rather do it by hand, or need the values for another tool, this is all of it.
+
+**Endpoint**
+
+| | |
+|---|---|
+| host | `openrouter.ai` |
+| base URL | `https://openrouter.ai/api` |
+| messages endpoint | `https://openrouter.ai/api/v1/messages` |
+| models endpoint | `https://openrouter.ai/api/v1/models` |
+| key / usage endpoint | `https://openrouter.ai/api/v1/key` |
+| protocol | the Anthropic Messages API, natively — no translation layer |
+| auth header | `Authorization: Bearer sk-or-v1-...` |
+| version header | `anthropic-version: 2023-06-01` |
+
+Claude Code appends `/v1/messages` itself, so `ANTHROPIC_BASE_URL` must be the **base**
+(`https://openrouter.ai/api`) and not the full messages URL.
+
+**Settings file**
+
+| OS | path |
+|---|---|
+| Windows | `C:\Users\<you>\.claude\settings.json` |
+| macOS | `/Users/<you>/.claude/settings.json` |
+| Linux | `/home/<you>/.claude/settings.json` |
+
+Paste this in, replacing the key. Claude Code applies `env` to every session it starts,
+which is why one file covers the CLI and the VSCode extension at once:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+    "ANTHROPIC_AUTH_TOKEN": "sk-or-v1-REPLACE-ME",
+    "ANTHROPIC_API_KEY": "",
+    "ANTHROPIC_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "ANTHROPIC_DEFAULT_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "z-ai/glm-5.3-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek/deepseek-v4-flash-0731",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1310720",
+    "MAX_THINKING_TOKENS": "0",
+    "API_TIMEOUT_MS": "600000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}
+```
+
+Then open a **new** terminal, or reload the VSCode window.
+
+**Why the non-obvious ones are there**
+
+- **Several model variables, not one.** The name of the small/background model has changed
+  across Claude Code versions, and an unrecognised variable is ignored. Setting all of them
+  is what stops a later upgrade quietly falling back to a Claude model your key cannot buy.
+- **`ANTHROPIC_API_KEY` is an empty string, not absent.** If it holds a real Anthropic key
+  it takes precedence and you are billed by Anthropic instead.
+- **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`.** Claude Code only knows the context window of models
+  in its own catalogue. Without this it assumes 200k and auto-compacts a 1.3M-token model at
+  a sixth of its real window. Use the model's `context_length` from the models endpoint.
+- **`MAX_THINKING_TOKENS: "0"`.** OpenRouter returns thinking blocks with an empty
+  signature, and it removes a large cost: in a measured request 57 of 63 output tokens were
+  thinking.
+
+**Check it by hand**
+
+```sh
+curl https://openrouter.ai/api/v1/messages \
+  -H "Authorization: Bearer sk-or-v1-..." \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"deepseek/deepseek-v4-flash-0731","max_tokens":64,
+       "messages":[{"role":"user","content":"say routed"}]}'
+```
+
+A working setup returns `"type": "message"` with a `content` array. Spend and remaining
+credit come from `https://openrouter.ai/api/v1/key` with the same auth header.
+
 ## Token-saving setup (optional)
 
 ```sh
