@@ -1,0 +1,6 @@
+# Never commit a real key or a generated config
+*.bak.*
+config.json
+secrets.env
+.env
+node_modules/
