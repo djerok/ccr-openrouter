@@ -144,11 +144,61 @@ function run(cmd, args, opts = {}) {
   };
 }
 
+/** Absolute path of a globally installed npm bin, or null. */
+function globalBin(cmd) {
+  const prefix = run('npm', ['prefix', '-g']).stdout;
+  if (!prefix) return null;
+  const candidates = IS_WIN
+    ? [path.join(prefix, `${cmd}.cmd`), path.join(prefix, `${cmd}.ps1`), path.join(prefix, cmd)]
+    : [path.join(prefix, 'bin', cmd), path.join(prefix, cmd)];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+/**
+ * Probe a command. Distinguishes the three outcomes that matter, because
+ * conflating them produces a misleading error: the binary can be absent, or
+ * present-but-unreachable on PATH, or present-and-reachable but crashing on
+ * startup (e.g. a native dependency whose install script never ran).
+ *
+ * Returns { state: 'ok'|'broken'|'missing', version, path, stderr }.
+ */
+function probeCommand(cmd) {
+  for (const args of [['--version'], ['-v']]) {
+    const res = run(cmd, args);
+    if (res.code === 0 && res.stdout) {
+      return { state: 'ok', version: res.stdout.split('\n')[0], path: cmd, stderr: '' };
+    }
+    // A non-zero exit with real stderr means it ran and failed — not missing.
+    if (res.stderr && !/not recognized|not found|ENOENT/i.test(res.stderr)) {
+      return { state: 'broken', version: null, path: cmd, stderr: res.stderr };
+    }
+  }
+
+  // Not reachable by name. It may still be installed but off PATH.
+  const abs = globalBin(cmd);
+  if (!abs) return { state: 'missing', version: null, path: null, stderr: '' };
+
+  for (const args of [['--version'], ['-v']]) {
+    const res = run(abs, args);
+    if (res.code === 0 && res.stdout) {
+      return { state: 'ok', version: res.stdout.split('\n')[0], path: abs, stderr: '' };
+    }
+    if (res.stderr) {
+      return { state: 'broken', version: null, path: abs, stderr: res.stderr };
+    }
+  }
+  return { state: 'broken', version: null, path: abs, stderr: '(no output)' };
+}
+
 function commandExists(cmd) {
-  const probe = run(cmd, ['--version']);
-  if (probe.code === 0) return probe.stdout.split('\n')[0];
-  const probe2 = run(cmd, ['-v']);
-  return probe2.code === 0 ? probe2.stdout.split('\n')[0] : null;
+  const p = probeCommand(cmd);
+  return p.state === 'ok' ? p.version : null;
+}
+
+/** npm >= 12 refuses to run dependency install scripts unless named explicitly. */
+function npmMajor() {
+  const v = run('npm', ['--version']).stdout;
+  return Number((v.split('.')[0] || '0').replace(/\D/g, '')) || 0;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -168,29 +218,87 @@ function checkNode() {
   ok(`node ${process.versions.node}`);
 }
 
-function ensureNpmPackage(binary, pkg, label) {
-  const version = commandExists(binary);
-  if (version) {
-    ok(`${label} present (${version})`);
+/** Resolved absolute paths, so later calls never depend on PATH. */
+const BIN = {};
+
+const PERMS_HINT = IS_WIN
+  ? 'If this is a permissions error, reopen the terminal as Administrator, or set a user-writable npm prefix:\n  npm config set prefix "%LOCALAPPDATA%\\npm"'
+  : 'Try again with sudo, or set a user-writable npm prefix:\n  npm config set prefix "$HOME/.npm-global"';
+
+/**
+ * @param nativeDeps packages whose install scripts must run for the binary to
+ *        work at all. npm >= 12 blocks these by default, and the failure shows
+ *        up much later as the binary crashing on startup.
+ */
+function npmInstallGlobal(pkg, nativeDeps = []) {
+  const args = ['install', '-g'];
+  if (nativeDeps.length && npmMajor() >= 12) {
+    args.push(`--allow-scripts=${nativeDeps.join(',')}`);
+  }
+  args.push(pkg);
+  return run('npm', args, { stdio: 'inherit' });
+}
+
+function ensureNpmPackage(binary, pkg, label, nativeDeps = []) {
+  let probe = probeCommand(binary);
+
+  if (probe.state === 'ok') {
+    BIN[binary] = probe.path;
+    ok(`${label} present (${probe.version})`);
     return;
   }
-  info(`${label} not found — installing ${pkg} globally (this takes a minute)`);
-  const res = run('npm', ['install', '-g', pkg], { stdio: 'inherit' });
-  if (res.code !== 0) {
+
+  if (probe.state === 'missing') {
+    info(`${label} not found — installing ${pkg} globally (this takes a minute)`);
+    const res = npmInstallGlobal(pkg, nativeDeps);
+    if (res.code !== 0) die(`npm install -g ${pkg} failed (exit ${res.code}).`, PERMS_HINT);
+    probe = probeCommand(binary);
+  }
+
+  // Installed, reachable, but exiting non-zero. On npm >= 12 the overwhelmingly
+  // likely cause is a native dependency whose build script was skipped, so try
+  // exactly that repair once before giving up.
+  if (probe.state === 'broken' && nativeDeps.length) {
+    warn(`${label} is installed but fails to start — retrying with its build scripts enabled`);
+    info(`(npm ${npmMajor()} blocks install scripts by default: ${nativeDeps.join(', ')})`);
+    const res = npmInstallGlobal(pkg, nativeDeps);
+    if (res.code === 0) probe = probeCommand(binary);
+  }
+
+  if (probe.state === 'ok') {
+    BIN[binary] = probe.path;
+    ok(`${label} installed`);
+    return;
+  }
+
+  if (probe.state === 'broken') {
     die(
-      `npm install -g ${pkg} failed (exit ${res.code}).`,
-      IS_WIN
-        ? 'If this is a permissions error, run the terminal as Administrator, or set a user-writable npm prefix:\n  npm config set prefix "%LOCALAPPDATA%\\npm"'
-        : 'Try again with sudo, or set a user-writable npm prefix:\n  npm config set prefix "$HOME/.npm-global"'
+      `${label} is installed at ${probe.path} but crashes when run.`,
+      `Its own error was:\n\n${probe.stderr.split('\n').slice(0, 8).join('\n')}\n\n` +
+        `Most often this is an unbuilt native module. Try:\n` +
+        `  npm install -g --allow-scripts=${(nativeDeps.join(',') || 'better-sqlite3')} ${pkg}\n` +
+        `and if that fails, install the build tools it needs (Python 3 and a C++ compiler),\n` +
+        `then re-run this script.`
     );
   }
-  if (!commandExists(binary)) {
-    die(
-      `${pkg} installed but "${binary}" is still not on PATH.`,
-      `Add your npm global bin directory to PATH:\n  ${run('npm', ['prefix', '-g']).stdout}`
-    );
-  }
-  ok(`${label} installed`);
+
+  die(
+    `${pkg} installed but "${binary}" is not runnable.`,
+    `Nothing was found in your npm global bin directory:\n  ${run('npm', ['prefix', '-g']).stdout}\n` +
+      `Add that directory to your PATH, open a new terminal, and re-run.\n${PERMS_HINT}`
+  );
+}
+
+/**
+ * Prefer the absolute path resolved at install time over a bare PATH lookup —
+ * a freshly installed global bin is often not yet visible to this process.
+ */
+function ccrPath() {
+  return BIN.ccr || globalBin('ccr') || 'ccr';
+}
+
+function runCcr(args, opts) {
+  return run(ccrPath(), args, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -622,14 +730,16 @@ function installAutostart() {
         '@echo off',
         'rem Generated by ccr-openrouter/setup.js — keeps Claude Code Router up',
         'rem so the Claude Code VSCode extension always has a proxy to talk to.',
-        'ccr start',
+        `"${ccrPath()}" start`,
         ''
       ].join('\r\n')
     );
     ok(`autostart installed: ${cmd}`);
   } else {
     const rc = path.join(HOME, process.env.SHELL && process.env.SHELL.includes('zsh') ? '.zshrc' : '.bashrc');
-    const line = '\n# ccr-openrouter: keep the router up for Claude Code\n(pgrep -f claude-code-router >/dev/null 2>&1 || ccr start >/dev/null 2>&1 &)\n';
+    const line =
+      '\n# ccr-openrouter: keep the router up for Claude Code\n' +
+      `(pgrep -f claude-code-router >/dev/null 2>&1 || "${ccrPath()}" start >/dev/null 2>&1 &)\n`;
     try {
       const current = fs.existsSync(rc) ? fs.readFileSync(rc, 'utf8') : '';
       if (!current.includes('ccr-openrouter')) fs.appendFileSync(rc, line);
@@ -742,7 +852,7 @@ function modeStatus() {
   console.log(`${C.bold}background:${C.reset} ${router.background || '-'}`);
   console.log(`${C.bold}longContext:${C.reset} ${router.longContext || '-'} (over ${router.longContextThreshold || '-'} tokens)`);
   console.log(`${C.bold}statusLine:${C.reset} ${(s.statusLine && s.statusLine.command) || '-'}`);
-  const probe = run('ccr', ['status']);
+  const probe = runCcr(['status']);
   console.log(`${C.bold}ccr:${C.reset}        ${probe.code === 0 ? probe.stdout.split('\n')[0] : C.red + 'not running' + C.reset}`);
 }
 
@@ -788,7 +898,9 @@ async function install() {
   say('Checking prerequisites');
   checkNode();
   ensureNpmPackage('claude', '@anthropic-ai/claude-code', 'Claude Code');
-  ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router');
+  ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router', [
+    'better-sqlite3',
+  ]);
 
   const key = resolveKey();
 
@@ -819,7 +931,7 @@ async function install() {
   }
 
   say('Starting the router');
-  run('ccr', ['restart']);
+  runCcr(['restart']);
   const up = await waitForCcr();
   if (!up) {
     die(

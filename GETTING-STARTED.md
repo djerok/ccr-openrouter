@@ -227,7 +227,9 @@ To change model in the middle of a conversation, type this into Claude Code:
 | `OpenRouter rejected the key (401)` | Wrong key, deleted key, or **no credit on the account** | Check <https://openrouter.ai/keys> and <https://openrouter.ai/settings/credits> |
 | `npm install -g ... failed` on Windows | No permission to write to the global folder | Right-click PowerShell → **Run as Administrator**, then re-run the setup |
 | `npm install -g ... failed` on macOS/Linux | Same, permissions | `sudo npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router`, then re-run the setup |
-| `"ccr" is still not on PATH` | Installed, but your terminal cannot find it | Close and reopen the terminal. If it persists, the message prints the folder to add to your PATH |
+| `Claude Code Router is installed ... but crashes when run` | A native module (`better-sqlite3`) was not built, because npm 12 blocks install scripts by default | The setup now retries this for you. If it still fails, run `npm install -g --allow-scripts=better-sqlite3 @musistudio/claude-code-router`, then re-run the setup |
+| `npm warn allow-scripts ... better-sqlite3` during install | Expected on npm 12 | Not an error. The setup re-installs with that script enabled if the router turns out to be broken |
+| `"ccr" is not runnable` | The global npm bin folder is not on your PATH | The message prints the folder. Add it to PATH, open a new terminal, re-run |
 | `CCR did not come up ... within 20s` | The router failed to start | Run `ccr start` on its own and read the error it prints. Something else may already be using port 3456 |
 | Claude Code says it cannot connect | The router is not running | Run `ccr start`. It should start automatically from now on — the setup added it to your system startup |
 | The statusline is blank or garbled | Your terminal cannot draw the symbols | Harmless. Windows users: use **Windows Terminal** rather than the old console window |
