@@ -98,41 +98,26 @@ only needed for Anthropic and Qwen models, which this never routes to.
 7. Sends one real request and shows you the reply. A config that writes but does not work
    is a failed install, and you should learn that now.
 
-## Plain-language mode
+## Prompt extras — off by default
 
-The installer writes `~/.claude/CLAUDE.md` telling Claude to answer like it is explaining to
-a smart 10-year-old: small words, short sentences, answer first, exact commands rather than
-paragraphs about commands. It goes in a marked block, so an existing `CLAUDE.md` is appended
-to rather than overwritten, and `--uninstall` removes only that block.
-
-Skip it with `--no-extras`.
-
-## Token savers
-
-Two optional extras, both skippable with `--no-extras`.
-
-**caveman** is bundled and installed by default. It is a pair of Claude Code hooks that
-compress replies — articles, filler and pleasantries are dropped, while code, commands and
-error strings are left byte-for-byte intact. Fewer output tokens for the same content.
-
-```
-/caveman lite | full | ultra     switch level
-stop caveman                     turn it off
-```
-
-The statusline shows a `[CAVEMAN]` badge when it is active, so the two do not fight over
-the same slot.
-
-**rtk** is *not* bundled. It is a separate third-party CLI that filters command output
-before it reaches the model. There is no public source for it, and the name `rtk` on both
-npm and crates.io belongs to an unrelated project ("Rust Type Kit"), so installing it by
-name would give you the wrong program. If you have a source for it:
+Two optional pieces change *how the model is instructed*: a bundled prompt-compression hook
+(caveman) and a plain-language `CLAUDE.md`. **Both are off unless you ask for them.**
 
 ```sh
-RTK_INSTALL_URL=<package-or-git-url> node setup.js --key sk-or-v1-...
+node setup.js --key sk-or-v1-... --extras
 ```
 
-An `rtk` already on your `PATH` is detected and left alone.
+They are off because on a small model they were observed producing turns that ran tools and
+then printed nothing at all — the work happened, the answer did not. Instructions that can
+cost you the reply are not a sensible default.
+
+Installing without `--extras` actively removes them if a previous run put them there: the
+hooks are unregistered and the `CLAUDE.md` block is stripped, leaving anything you wrote
+around it. Files are deleted **only** when byte-identical to the bundled copy — if you have
+your own build of these hooks, it is left on disk and reported, not removed.
+
+What stays on by default is passive: routing, the version display, and usage logging. None
+of it touches the prompt.
 
 ## It starts itself, and keeps itself current
 

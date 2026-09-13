@@ -24,7 +24,9 @@
  *   node setup.js --on                 # back to OpenRouter
  *   node setup.js --uninstall          # restore the newest backup
  *   node setup.js --no-verify          # skip the live test request
- *   node setup.js --no-extras          # skip CLAUDE.md, caveman and rtk
+ *   node setup.js --extras             # also install caveman + a plain-language CLAUDE.md
+ *                                      # (off by default: they change how the model is
+ *                                      #  instructed, and a small model can go silent)
  *   node setup.js --no-launch          # do not start Claude Code when finished
  *   node setup.js --no-autoupdate      # do not check GitHub for updates at session start
  *   node setup.js --version            # installed version vs GitHub
@@ -559,6 +561,77 @@ function writeClaudeMd() {
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Remove anything this script previously added that shapes the model's replies.
+ *
+ * Both the bundled prompt-compression hook and the plain-language CLAUDE.md
+ * block change how the model is instructed, and on a small model that showed up
+ * as a turn which ran tools and then printed nothing at all. Instructions that
+ * can cost you the answer are not a sensible default, so unless they are asked
+ * for explicitly the installer takes them back off.
+ */
+function removePromptExtras(settings) {
+  const removed = [];
+
+  // Unregister the caveman hooks, leaving every other hook untouched.
+  if (settings.hooks) {
+    for (const event of Object.keys(settings.hooks)) {
+      const before = JSON.stringify(settings.hooks[event] || []);
+      settings.hooks[event] = (settings.hooks[event] || []).filter(
+        (entry) => !JSON.stringify(entry).includes('caveman')
+      );
+      if (JSON.stringify(settings.hooks[event]) !== before) removed.push(`${event} hook`);
+      if (!settings.hooks[event].length) delete settings.hooks[event];
+    }
+  }
+
+  // Delete only the copies this script put there. Someone may have been running
+  // their own build of these hooks long before it was bundled here, and deleting
+  // a file we did not write is not ours to do — so a file is removed only when
+  // it is byte-identical to the bundled copy. Anything else is left on disk and
+  // reported; unregistered, it is inert either way.
+  const bundled = path.join(__dirname, 'extras', 'caveman');
+  const kept = [];
+  for (const f of CAVEMAN_FILES) {
+    const installed = path.join(HOOKS_DIR, f);
+    if (!fs.existsSync(installed)) continue;
+    try {
+      const src = path.join(bundled, f);
+      const same =
+        fs.existsSync(src) && fs.readFileSync(src).equals(fs.readFileSync(installed));
+      if (same) {
+        fs.unlinkSync(installed);
+        removed.push(f);
+      } else {
+        kept.push(f);
+      }
+    } catch {
+      kept.push(f);
+    }
+  }
+  if (kept.length) {
+    info(`left your own copies in place (unregistered, not deleted): ${kept.join(', ')}`);
+  }
+
+  // Strip only our own marked block; anything the user wrote around it stays.
+  try {
+    const md = fs.readFileSync(CLAUDE_MD, 'utf8');
+    if (md.includes(CLAUDE_MD_BEGIN)) {
+      const re = new RegExp(
+        '\\n*' + escapeRe(CLAUDE_MD_BEGIN) + '[\\s\\S]*?' + escapeRe(CLAUDE_MD_END) + '\\n*',
+        'g'
+      );
+      const stripped = md.replace(re, '\n');
+      if (stripped.trim()) fs.writeFileSync(CLAUDE_MD, stripped);
+      else fs.unlinkSync(CLAUDE_MD);
+      removed.push('CLAUDE.md block');
+    }
+  } catch {}
+
+  if (removed.length) ok(`removed prompt extras: ${removed.join(', ')}`);
+  return removed.length;
+}
 
 // ---------------------------------------------------------------------------
 // Version
@@ -1401,7 +1474,9 @@ async function install() {
   writeStatusline();
 
   say('Pointing Claude Code at OpenRouter (covers the CLI and the VSCode extension)');
-  const extras = !hasFlag('--no-extras');
+  // Opt-in, not opt-out. These change how the model is instructed, and a
+  // machine that answers nothing is worse than one that answers verbosely.
+  const extras = hasFlag('--extras');
   // The smaller of the two windows: one setting covers both models, and
   // over-stating it would let a session grow past what the other can accept.
   const contextTokens = Math.min(
@@ -1411,6 +1486,7 @@ async function install() {
   const sha = await currentSha();
   writeClaudeSettings(key, cheap.id, dear.id, contextTokens, (settings) => {
     if (extras) installCaveman(settings);
+    else removePromptExtras(settings);
     if (!hasFlag('--no-usagelog')) installUsageLog(settings);
     if (!hasFlag('--no-autoupdate')) installAutoupdate(settings, sha);
   });
