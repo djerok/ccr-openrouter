@@ -51,12 +51,29 @@ works with a real request.
 
 Default routing:
 
-| route | model |
-|---|---|
-| `default`, `background` | `deepseek/deepseek-v4-flash-0731` |
-| `think`, `longContext` | `z-ai/glm-5.3-flash` |
+| route | model | why |
+|---|---|---|
+| `default`, `background` | `deepseek/deepseek-v4-flash-0731` | the cheap one — everything lands here |
+| `think`, `longContext` | `z-ai/glm-5.3-flash` | the expensive one — only when you ask it to think, or the context gets big |
 
-Change the `WANTED` table at the top of `setup.js` for anything else on OpenRouter.
+At the time of writing that is $0.04/M in against $0.15/M in, a 3.75x difference, so the
+split is worth having.
+
+**Which model gets which role is decided at install time from live prices, not hardcoded.**
+The cheaper of the two becomes `default` and `background`; the pricier becomes `think` and
+`longContext`. If a provider reprices, the roles follow instead of silently inverting. The
+setup prints both prices so you can see what it chose.
+
+Change the `WANTED` table at the top of `setup.js` for anything else on OpenRouter — the
+price ranking applies to whatever you put there.
+
+### Caching
+
+Automatic for both, no configuration. Per OpenRouter's docs, *"Prompt caching with DeepSeek
+is automated and does not require any additional configuration"*, and the same for Z.AI.
+DeepSeek cache reads bill at 0.1x input; Z.AI cache writes are free and reads are
+discounted. You do not need to set `cache_control` anywhere — that is only required for
+Anthropic and Qwen models, which this does not route to.
 
 ## What it does
 

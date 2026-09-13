@@ -411,6 +411,25 @@ async function fetchCatalogue(key) {
 }
 
 /**
+ * Cost per million tokens, weighted 1:3 input:output — roughly the shape of a
+ * coding session, where the model reads far more than it writes but output is
+ * the pricier half.
+ */
+function blendedPrice(m) {
+  const p = m.pricing || {};
+  const inp = Number(p.prompt) || 0;
+  const out = Number(p.completion) || 0;
+  return (inp * 3 + out) * 1e6 / 4;
+}
+
+function priceLabel(m) {
+  const p = m.pricing || {};
+  const inp = (Number(p.prompt) || 0) * 1e6;
+  const out = (Number(p.completion) || 0) * 1e6;
+  return `$${inp.toFixed(2)}/M in, $${out.toFixed(2)}/M out`;
+}
+
+/**
  * Prefer the exact slug. If it is gone, take the highest-context model whose id
  * contains every fuzzy term — never silently fall through to something unrelated.
  */
@@ -1020,11 +1039,24 @@ async function install() {
 
   say('Resolving models against the live OpenRouter catalogue');
   const catalogue = await fetchCatalogue(key);
-  const fast = pickModel(catalogue, WANTED.fast);
-  const smart = pickModel(catalogue, WANTED.smart);
-  for (const [role, m, want] of [['fast ', fast, WANTED.fast], ['smart', smart, WANTED.smart]]) {
+  const a = pickModel(catalogue, WANTED.fast);
+  const b = pickModel(catalogue, WANTED.smart);
+
+  // Which model is the cheap default and which is the expensive escalation is
+  // decided by their live prices, not by the order they are declared above.
+  // Hardcoding that ranking would silently invert the whole routing table the
+  // day a provider repriced.
+  const [fast, smart] = [a, b].sort((x, y) => blendedPrice(x) - blendedPrice(y));
+
+  for (const [role, m] of [['cheap', fast], ['dear ', smart]]) {
+    const want = m === a ? WANTED.fast : WANTED.smart;
     const note = m.matchedBy === 'exact' ? '' : ` ${C.yellow}(fuzzy match — wanted ${want.slug})${C.reset}`;
-    ok(`${role} → ${m.id}  ${C.dim}${(m.context_length || 0).toLocaleString()} ctx${C.reset}${note}`);
+    ok(
+      `${role} → ${m.id}  ${C.dim}${priceLabel(m)}, ${(m.context_length || 0).toLocaleString()} ctx${C.reset}${note}`
+    );
+  }
+  if (blendedPrice(fast) === blendedPrice(smart)) {
+    warn('both models cost the same — keeping the declared order');
   }
 
   // The config is written before the router is installed, not after. CCR
