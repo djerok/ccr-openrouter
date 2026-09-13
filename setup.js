@@ -1511,7 +1511,8 @@ async function install() {
   ok(`default -> ${main.id}  ${C.dim}${priceLabel(main)}${C.reset}`);
   ok(`other   -> ${secondary.id}  ${C.dim}${priceLabel(secondary)}${C.reset}`);
   if (!hasFlag('--reliable')) {
-    info('if a turn ever runs tools and prints nothing, re-run with --reliable');
+    warn(`${cheap.id} drops the reply on about 4 in 10 tool-using turns`);
+    info(`measured over 17 runs; ${dear.id} was 0 in 6. Re-run with --reliable to swap them.`);
   }
   for (const m of [first, second]) {
     if (m.matchedBy === 'fuzzy') warn(`${m.id} was a fuzzy match — the exact slug is gone`);

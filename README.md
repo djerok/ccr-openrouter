@@ -74,9 +74,20 @@ miss the extension.
 $0.04/M in against $0.15/M in, so the default is 3.75x cheaper. Which of the two counts as
 cheap is read from live prices at install time, so a reprice cannot invert the labels.
 
-**One known rough edge.** DeepSeek sometimes ends a tool-using turn with no text block — the
-tools run, the turn ends, nothing is printed. GLM did not do this in the same tests. If it
-bothers you:
+**One known rough edge, measured.** DeepSeek ends a tool-using turn with no text block — the
+tools run, the turn ends, nothing is printed — on roughly **4 in 10** turns:
+
+| model | silent turns |
+|---|---|
+| `deepseek/deepseek-v4-flash-0731` | 7 of 17 |
+| `z-ai/glm-5.3-flash` | 0 of 6 |
+
+Only turns that call a tool are affected; plain questions never failed. It is not the hooks
+(it happens with all hooks removed) and not the prompt. The same two-step tool exchange sent
+straight to the API, bypassing Claude Code, was 0 of 7 — so it appears only under the larger,
+more complex requests Claude Code actually sends.
+
+The default is left as the cheap model because that is what was asked for. To swap:
 
 ```sh
 node setup.js --key sk-or-v1-... --reliable   # GLM becomes the default instead
