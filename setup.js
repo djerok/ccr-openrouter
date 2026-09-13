@@ -1068,14 +1068,14 @@ async function install() {
 
   const target = claudeBin ? claudeBin.path : 'claude';
 
-  console.log(`\n${C.green}${C.bold}Done.${C.reset}\n`);
-  console.log(`  ${C.bold}claude:${C.reset}             ${target}`);
-  console.log(`  ${C.bold}settings:${C.reset}           ${CLAUDE_SETTINGS}`);
-  console.log(`  everyday model     : ${cheap.id}`);
-  console.log(`  when you need more : ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
-  console.log(`  back to Anthropic  : node setup.js --off`);
-  console.log(`  ${C.bold}VSCode:${C.reset}             reload the window (Ctrl+Shift+P -> "Developer: Reload Window")`);
-  console.log(`\n  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
+  out(`\n${C.green}${C.bold}Done.${C.reset}\n`);
+  out(`  ${C.bold}claude:${C.reset}             ${target}`);
+  out(`  ${C.bold}settings:${C.reset}           ${CLAUDE_SETTINGS}`);
+  out(`  everyday model     : ${cheap.id}`);
+  out(`  when you need more : ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
+  out(`  back to Anthropic  : node setup.js --off`);
+  out(`  ${C.bold}VSCode:${C.reset}             reload the window (Ctrl+Shift+P -> "Developer: Reload Window")`);
+  out(`\n  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
 
   // Auto-launch. The point of this script is that one pasted line ends with a
   // working Claude Code, so finishing at a shell prompt with homework ("now
