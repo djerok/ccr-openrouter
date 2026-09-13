@@ -27,6 +27,9 @@
  *   node setup.js --no-extras          # skip CLAUDE.md, caveman and rtk
  *   node setup.js --no-launch          # do not start Claude Code when finished
  *   node setup.js --no-autoupdate      # do not check GitHub for updates at session start
+ *   node setup.js --version            # installed version vs GitHub
+ *   node setup.js --trim               # see/disable MCP servers (they cost tokens every request)
+ *   node setup.js --untrim             # put the MCP servers back
  *   node setup.js --usage              # token and spend totals
  *   node setup.js --no-usagelog        # do not log per-turn usage
  *   node setup.js --quiet              # no output except warnings (used by the updater)
@@ -405,6 +408,15 @@ function main() {
 
   const effort = settings.effortLevel || null;
 
+  // Version, straight from the state file the installer and updater maintain.
+  // Shown on every render so a stale install cannot go unnoticed.
+  let version = null, outdated = false;
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'openrouter-setup-state.json'), 'utf8'));
+    if (st.sha) version = String(st.sha).slice(0, 7);
+    outdated = Boolean(st.outdated);
+  } catch {}
+
   const dir = (input.workspace && (input.workspace.current_dir || input.workspace.project_dir)) || process.cwd();
   let branch = null;
   try {
@@ -430,6 +442,11 @@ function main() {
   parts.push(C.blue + path.basename(dir) + C.reset);
   if (branch) parts.push(C.cyan + branch + C.reset);
   if (cost !== null && cost > 0) parts.push(C.dim + '$' + cost.toFixed(4) + C.reset);
+  if (version) {
+    parts.push(outdated
+      ? C.yellow + 'v' + version + ' (update pending)' + C.reset
+      : C.dim + 'v' + version + C.reset);
+  }
 
   process.stdout.write(parts.join(C.dim + ' | ' + C.reset));
 }
@@ -542,6 +559,143 @@ function writeClaudeMd() {
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+const CLAUDE_JSON = path.join(HOME, '.claude.json');
+
+function installedSha() {
+  const st = readJson(STATE_FILE, null) || readJson(LEGACY_STATE_FILE, {});
+  return st.sha || null;
+}
+
+function shortSha(sha) {
+  return sha ? String(sha).slice(0, 7) : 'unknown';
+}
+
+async function modeVersion() {
+  const local = installedSha();
+  const remote = await currentSha();
+  const line = (k, v) => console.log(`${C.bold}${(k + ':').padEnd(12)}${C.reset}${v}`);
+
+  line('installed', shortSha(local));
+  line('github', remote ? shortSha(remote) : `${C.yellow}unreachable${C.reset}`);
+
+  if (!remote) {
+    console.log(`
+${C.yellow}Could not reach GitHub, so this cannot be compared.${C.reset}`);
+    return;
+  }
+  if (!local) {
+    console.log(`
+${C.yellow}No installed version recorded.${C.reset} Re-run the setup to record one.`);
+    return;
+  }
+  if (local === remote) {
+    console.log(`
+${C.green}Up to date${C.reset} — installed matches ${REPO}@main.`);
+  } else {
+    console.log(`
+${C.yellow}Out of date.${C.reset} ${shortSha(local)} installed, ${shortSha(remote)} on GitHub.`);
+    console.log(`Update now:  ${C.cyan}node setup.js --key <your-key>${C.reset}`);
+    console.log(`${C.dim}Or wait — the session-start hook picks it up within six hours.${C.reset}`);
+  }
+  console.log(`${C.dim}https://github.com/${REPO}/commits/main${C.reset}`);
+}
+
+// ---------------------------------------------------------------------------
+// MCP trimming
+// ---------------------------------------------------------------------------
+
+/**
+ * Every enabled MCP server's tool schemas are sent with every request, whatever
+ * the question is. That is the largest avoidable per-request cost, but which
+ * servers matter is the user's call — silently disabling someone's notes or
+ * database access to save tokens is not a trade this script gets to make.
+ */
+function mcpServers() {
+  const cfg = readJson(CLAUDE_JSON, {});
+  return Object.keys(cfg.mcpServers || {});
+}
+
+function reportMcp() {
+  const names = mcpServers();
+  if (!names.length) return;
+  info(`${names.length} MCP server${names.length === 1 ? '' : 's'} enabled: ${names.join(', ')}`);
+  info('each one adds its tool schemas to every request — `node setup.js --trim` to pick');
+}
+
+function modeTrim() {
+  const cfg = readJson(CLAUDE_JSON, {});
+  const servers = cfg.mcpServers || {};
+  const names = Object.keys(servers);
+
+  if (!names.length) {
+    console.log('No MCP servers are configured, so there is nothing to trim.');
+    return;
+  }
+
+  const keep = hasFlag('--none') ? [] : argv.filter((a) => !a.startsWith('--'));
+  if (!keep.length && !hasFlag('--none')) {
+    console.log(`${C.bold}MCP servers currently enabled${C.reset}
+`);
+    for (const n of names) console.log(`  ${n}`);
+    console.log(`
+Each sends its tool schemas with ${C.bold}every${C.reset} request, whatever you ask.`);
+    console.log(`
+Keep only the ones you name:`);
+    console.log(`  ${C.cyan}node setup.js --trim ${names[0]}${C.reset}`);
+    console.log(`Disable all of them:`);
+    console.log(`  ${C.cyan}node setup.js --trim --none${C.reset}`);
+    console.log(`Put everything back:`);
+    console.log(`  ${C.cyan}node setup.js --untrim${C.reset}`);
+    return;
+  }
+
+  const unknown = keep.filter((k) => !names.includes(k));
+  if (unknown.length) {
+    die(`No such MCP server: ${unknown.join(', ')}`, `Configured: ${names.join(', ')}`);
+  }
+
+  const bak = backup(CLAUDE_JSON);
+  const stash = readJson(STATE_FILE, {});
+  stash.trimmedMcp = stash.trimmedMcp || {};
+
+  const removed = [];
+  for (const n of names) {
+    if (keep.includes(n)) continue;
+    stash.trimmedMcp[n] = servers[n];
+    delete servers[n];
+    removed.push(n);
+  }
+  cfg.mcpServers = servers;
+  writeJson(CLAUDE_JSON, cfg);
+  writeJson(STATE_FILE, stash);
+
+  console.log(removed.length
+    ? `${C.green}Disabled:${C.reset} ${removed.join(', ')}`
+    : 'Nothing to disable.');
+  console.log(`${C.green}Kept:${C.reset} ${keep.join(', ') || '(none)'}`);
+  if (bak) console.log(`${C.dim}backup: ${path.basename(bak)}${C.reset}`);
+  console.log(`Restore with: ${C.cyan}node setup.js --untrim${C.reset}`);
+}
+
+function modeUntrim() {
+  const stash = readJson(STATE_FILE, {});
+  const saved = stash.trimmedMcp || {};
+  if (!Object.keys(saved).length) {
+    console.log('Nothing was trimmed, so there is nothing to restore.');
+    return;
+  }
+  const cfg = readJson(CLAUDE_JSON, {});
+  cfg.mcpServers = { ...(cfg.mcpServers || {}), ...saved };
+  writeJson(CLAUDE_JSON, cfg);
+  delete stash.trimmedMcp;
+  writeJson(STATE_FILE, stash);
+  console.log(`${C.green}Restored:${C.reset} ${Object.keys(saved).join(', ')}`);
+}
 
 // ---------------------------------------------------------------------------
 // Usage logging
@@ -797,9 +951,16 @@ async function runCheck() {
 
   if (sha === state.sha) {
     state.sha = sha;
+    state.outdated = false;
     writeState(state);
     return log('up to date (' + sha.slice(0, 7) + ')');
   }
+
+  // Flag it immediately so the statusline says so even if the reinstall below
+  // fails or the machine is offline for the rest of the session.
+  state.outdated = true;
+  state.latest = sha;
+  writeState(state);
 
   log('update available: ' + String(state.sha).slice(0, 7) + ' -> ' + sha.slice(0, 7));
 
@@ -841,6 +1002,7 @@ async function runCheck() {
       if (c === 0) {
         const s = readState();
         s.sha = sha;
+        s.outdated = false;
         writeState(s);
       }
       resolve();
@@ -901,6 +1063,7 @@ function installAutoupdate(settings, sha) {
 
   const state = readJson(STATE_FILE, {});
   state.sha = sha || state.sha || null;
+  state.outdated = false;
   state.lastCheck = Date.now();
   writeJson(STATE_FILE, state);
 
@@ -1255,6 +1418,8 @@ async function install() {
   info(`default ${cheap.id} | opus slot ${dear.id}`);
   info(`context window ${contextTokens.toLocaleString()} tokens`);
 
+  reportMcp();
+
   if (extras) {
     say('Writing plain-language instructions');
     writeClaudeMd();
@@ -1279,6 +1444,7 @@ async function install() {
   const target = claudeBin ? claudeBin.path : 'claude';
 
   out(`\n${C.green}${C.bold}Done.${C.reset}\n`);
+  out(`  ${C.bold}version:${C.reset}            ${shortSha(installedSha())}  ${C.dim}(github.com/${REPO})${C.reset}`);
   out(`  ${C.bold}claude:${C.reset}             ${target}`);
   out(`  ${C.bold}settings:${C.reset}           ${CLAUDE_SETTINGS}`);
   out(`  everyday model     : ${cheap.id}`);
@@ -1321,6 +1487,9 @@ async function install() {
     console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*|^ \* ?|^ \*/gm, ''));
     return;
   }
+  if (hasFlag('--version') || hasFlag('-v')) return modeVersion();
+  if (hasFlag('--trim')) return modeTrim();
+  if (hasFlag('--untrim')) return modeUntrim();
   if (hasFlag('--usage')) return modeUsage();
   if (hasFlag('--doctor')) return modeDoctor();
   if (hasFlag('--status')) return modeStatus();

@@ -149,6 +149,58 @@ break the session you are starting. Every path swallows its own errors by design
 result lands on your next session, and a log of what happened is at
 `~/.claude/openrouter-autoupdate.log`. Pass `--no-autoupdate` to skip it.
 
+## Version, on every launch
+
+The statusline ends with the installed version — the commit of this repo that is actually
+on your machine:
+
+```
+● deepseek-v4-flash-0731 (cheap) | my-project | main | $0.0031 | v20d0269
+```
+
+When the session-start check finds a newer commit, it turns yellow immediately, whether or
+not the update itself succeeds:
+
+```
+... | v20d0269 (update pending)
+```
+
+To compare directly against GitHub:
+
+```sh
+node setup.js --version
+```
+
+```
+installed:  20d0269
+github:     20d0269
+
+Up to date — installed matches djerok/claude-openrouter@main.
+```
+
+## Cutting the per-request cost
+
+The largest avoidable cost is not what you type, it is what is prepended to every request.
+Each enabled MCP server sends its tool schemas on **every** call, whatever you asked —
+"write snake.py" pays for your database tooling too.
+
+```sh
+node setup.js --trim              # list what is enabled
+node setup.js --trim obsidian     # keep only obsidian
+node setup.js --trim --none       # disable all of them
+node setup.js --untrim            # put them all back
+```
+
+`~/.claude.json` is backed up first and the removed entries are stashed, so `--untrim` is
+exact.
+
+**The installer does not do this for you.** It reports what is enabled and leaves the choice
+alone: quietly disabling someone's notes or database access to save tokens is not a trade a
+setup script should make on its own.
+
+`--usage` tells you whether it is worth doing — it reports input tokens per turn and what
+share of them the provider's cache absorbed.
+
 ## Usage logging
 
 Every assistant turn appends one line to `~/.claude/openrouter-usage.jsonl`. This is a
@@ -184,6 +236,8 @@ npx --allow-git=root github:djerok/claude-openrouter --no-launch         # do no
 npx --allow-git=root github:djerok/claude-openrouter --no-autoupdate     # do not self-update on session start
 npx --allow-git=root github:djerok/claude-openrouter --usage             # token and spend totals
 npx --allow-git=root github:djerok/claude-openrouter --no-usagelog       # do not log per-turn usage
+npx --allow-git=root github:djerok/claude-openrouter --version           # installed version vs GitHub
+npx --allow-git=root github:djerok/claude-openrouter --trim              # see/disable MCP servers
 ```
 
 From a clone, use `node setup.js` in place of the `npx` part.
