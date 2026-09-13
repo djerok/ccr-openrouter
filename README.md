@@ -10,6 +10,10 @@ node setup.js --key sk-or-v1-...
 
 No npm dependencies. Node >= 18. Windows, macOS, Linux.
 
+**New to this?** → **[GETTING-STARTED.md](GETTING-STARTED.md)** walks through it from a
+machine with nothing installed: opening a terminal, installing Node, getting an OpenRouter
+key, and what to do when a step fails. Windows, macOS and Linux side by side.
+
 ## Why
 
 Claude Code speaks the Anthropic API. [Claude Code Router](https://github.com/musistudio/claude-code-router)
