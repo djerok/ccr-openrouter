@@ -330,6 +330,18 @@ function routingEnv(key, cheap, dear, contextTokens) {
     // auto-compacts a 1.3M-token model at a sixth of its real window. The number
     // comes from the same catalogue response the models were chosen from.
     CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextTokens || 200000),
+    // Extended thinking off. This is a correctness fix, not a preference.
+    //
+    // With it on, a turn that calls a tool comes back with a thinking block and
+    // no text block at all: the work happens, nothing is printed. OpenRouter
+    // returns thinking blocks with an empty signature, and once Claude Code
+    // echoes one back on the following request the model stops producing text.
+    // Reproduced on a clean machine — "run a shell command and tell me the
+    // count" printed nothing, and printed the answer with this set to 0.
+    //
+    // It is also much cheaper. These models reason server-side regardless, and
+    // in a measured request 57 of 63 output tokens were thinking.
+    MAX_THINKING_TOKENS: '0',
   };
 }
 
@@ -1334,6 +1346,7 @@ function modeStatus() {
   line('default', env.ANTHROPIC_MODEL || '-');
   line('background', env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '-');
   line('opus slot', env.ANTHROPIC_DEFAULT_OPUS_MODEL || '-');
+  line('thinking', env.MAX_THINKING_TOKENS === '0' ? 'off (required — see README)' : env.MAX_THINKING_TOKENS || 'default');
   line('context', env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
     ? Number(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toLocaleString() + ' tokens' : '-');
   line('key', env.ANTHROPIC_AUTH_TOKEN ? env.ANTHROPIC_AUTH_TOKEN.slice(0, 12) + '...' : '-');
