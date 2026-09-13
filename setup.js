@@ -132,10 +132,19 @@ function backup(file) {
 }
 
 function run(cmd, args, opts = {}) {
-  // shell:true only where it is needed (Windows .cmd shims), because it also
-  // turns arguments into an unescaped string.
-  const needsShell = IS_WIN && !/\.(exe)$/i.test(cmd);
-  const res = spawnSync(cmd, args, { encoding: 'utf8', shell: needsShell, ...opts });
+  // Windows needs a shell to run .cmd/.ps1 shims. Node deprecated passing an
+  // args array together with shell:true (DEP0190) because it concatenates them
+  // unescaped, so when a shell is required the command line is built and quoted
+  // here and the args array is left empty.
+  const needsShell = IS_WIN && !/\.exe$/i.test(cmd);
+  let file = cmd;
+  let list = args;
+  if (needsShell) {
+    const quote = (a) => (/[\s&|<>^"]/.test(a) ? `"${String(a).replace(/"/g, '\\"')}"` : a);
+    file = [quote(cmd), ...args.map(quote)].join(' ');
+    list = [];
+  }
+  const res = spawnSync(file, list, { encoding: 'utf8', shell: needsShell, ...opts });
   return {
     code: res.status === null ? 1 : res.status,
     stdout: (res.stdout || '').trim(),
@@ -1003,7 +1012,7 @@ function modeUninstall() {
 // ---------------------------------------------------------------------------
 
 async function install() {
-  console.log(`${C.bold}Claude Code -> OpenRouter${C.reset}\n`);
+  out(`${C.bold}Claude Code -> OpenRouter${C.reset}\n`);
 
   say('Checking prerequisites');
   checkNode();
@@ -1081,15 +1090,15 @@ async function install() {
   // working Claude Code, so finishing at a shell prompt with homework ("now
   // open a new terminal") is a worse ending than simply starting it.
   if (hasFlag('--no-launch') || QUIET) {
-    console.log(`\n  ${C.dim}Start it with:${C.reset} ${C.cyan}claude${C.reset}`);
+    out(`\n  ${C.dim}Start it with:${C.reset} ${C.cyan}claude${C.reset}`);
     return;
   }
   if (!process.stdout.isTTY) {
-    console.log(`\n  ${C.dim}Not an interactive terminal, so not launching. Run:${C.reset} ${C.cyan}claude${C.reset}`);
+    out(`\n  ${C.dim}Not an interactive terminal, so not launching. Run:${C.reset} ${C.cyan}claude${C.reset}`);
     return;
   }
 
-  console.log(`\n  ${C.cyan}Starting Claude Code...${C.reset}\n`);
+  out(`\n  ${C.cyan}Starting Claude Code...${C.reset}\n`);
   const res = spawnSync(target, [], {
     stdio: 'inherit',
     // The settings file is written already and a fresh process reads it, but
@@ -1100,7 +1109,7 @@ async function install() {
   });
   if (res.error) {
     warn(`could not start Claude Code automatically: ${res.error.message}`);
-    console.log(`  Start it yourself with: ${C.cyan}claude${C.reset}`);
+    out(`  Start it yourself with: ${C.cyan}claude${C.reset}`);
   }
 }
 
