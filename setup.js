@@ -775,6 +775,41 @@ function writeStatusline() {
 // 6. Autostart — the VSCode extension fails cold if CCR is not already running
 // ---------------------------------------------------------------------------
 
+const AUTOSTART_BEGIN = '# >>> ccr-openrouter: keep the router up for Claude Code >>>';
+const AUTOSTART_END = '# <<< ccr-openrouter <<<';
+const RC_CANDIDATES = ['.zshrc', '.bashrc', '.bash_profile', '.profile'];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Which shell rc file to write.
+ *
+ * Getting this wrong is silent: appending to .bashrc on macOS means zsh never
+ * reads it, so the router simply never starts and the VSCode extension reports
+ * a connection failure with nothing to point at. macOS has defaulted to zsh
+ * since Catalina, and $SHELL is not always set when this runs under npx, so
+ * the platform default wins over an absent $SHELL rather than falling through
+ * to bash.
+ */
+function shellRc() {
+  const shell = process.env.SHELL || '';
+  if (shell.includes('zsh')) return path.join(HOME, '.zshrc');
+  if (shell.includes('bash')) {
+    // macOS bash reads .bash_profile for login shells; Linux uses .bashrc.
+    const bp = path.join(HOME, '.bash_profile');
+    if (process.platform === 'darwin' && fs.existsSync(bp)) return bp;
+    return path.join(HOME, '.bashrc');
+  }
+  if (process.platform === 'darwin') return path.join(HOME, '.zshrc');
+
+  // Unknown shell on Linux: prefer an rc that already exists.
+  for (const name of RC_CANDIDATES) {
+    const p = path.join(HOME, name);
+    if (fs.existsSync(p)) return p;
+  }
+  return path.join(HOME, '.profile');
+}
+
 function installAutostart() {
   if (IS_WIN) {
     const startup = path.join(
@@ -804,16 +839,62 @@ function installAutostart() {
     );
     ok(`autostart installed: ${cmd}`);
   } else {
-    const rc = path.join(HOME, process.env.SHELL && process.env.SHELL.includes('zsh') ? '.zshrc' : '.bashrc');
-    const line =
-      '\n# ccr-openrouter: keep the router up for Claude Code\n' +
-      `(pgrep -f claude-code-router >/dev/null 2>&1 || "${ccrPath()}" start >/dev/null 2>&1 &)\n`;
+    const rc = shellRc();
+    const block =
+      `\n${AUTOSTART_BEGIN}\n` +
+      `(pgrep -f claude-code-router >/dev/null 2>&1 || "${ccrPath()}" start >/dev/null 2>&1 &)\n` +
+      `${AUTOSTART_END}\n`;
     try {
       const current = fs.existsSync(rc) ? fs.readFileSync(rc, 'utf8') : '';
-      if (!current.includes('ccr-openrouter')) fs.appendFileSync(rc, line);
-      ok(`autostart appended to ${rc}`);
+      if (current.includes(AUTOSTART_BEGIN)) {
+        ok(`autostart already present in ${rc}`);
+      } else {
+        fs.appendFileSync(rc, block);
+        ok(`autostart appended to ${rc}`);
+      }
     } catch (err) {
       warn(`could not write ${rc}: ${err.message} — start CCR manually with \`ccr start\``);
+    }
+  }
+}
+
+/** Remove what installAutostart() added. Both platforms. */
+function removeAutostart() {
+  if (IS_WIN) {
+    const cmd = path.join(
+      HOME, 'AppData', 'Roaming', 'Microsoft', 'Windows',
+      'Start Menu', 'Programs', 'Startup', 'ccr-openrouter.cmd'
+    );
+    try {
+      fs.unlinkSync(cmd);
+      console.log(`removed ${cmd}`);
+    } catch {}
+    return;
+  }
+
+  // Check every rc file, not only the one we would pick today — the user's
+  // shell may have changed since the install.
+  for (const name of RC_CANDIDATES) {
+    const rc = path.join(HOME, name);
+    if (!fs.existsSync(rc)) continue;
+    let text;
+    try {
+      text = fs.readFileSync(rc, 'utf8');
+    } catch {
+      continue;
+    }
+    if (!text.includes(AUTOSTART_BEGIN)) continue;
+
+    const stripped = text.replace(
+      new RegExp(`\\n?${escapeRe(AUTOSTART_BEGIN)}[\\s\\S]*?${escapeRe(AUTOSTART_END)}\\n?`, 'g'),
+      '\n'
+    );
+    try {
+      fs.copyFileSync(rc, `${rc}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      fs.writeFileSync(rc, stripped);
+      console.log(`removed the autostart block from ${rc}`);
+    } catch (err) {
+      console.log(`could not edit ${rc}: ${err.message} — remove the ccr-openrouter block by hand`);
     }
   }
 }
@@ -1011,15 +1092,15 @@ function modeUninstall() {
     console.log(`restored ${file} from ${baks[baks.length - 1]}`);
     restored++;
   }
-  for (const extra of [
-    STATUSLINE,
-    path.join(HOME, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'ccr-openrouter.cmd'),
-  ]) {
-    try {
-      fs.unlinkSync(extra);
-      console.log(`removed ${extra}`);
-    } catch {}
-  }
+  try {
+    fs.unlinkSync(STATUSLINE);
+    console.log(`removed ${STATUSLINE}`);
+  } catch {}
+
+  // Previously this deleted only the Windows startup file, so on macOS and
+  // Linux the line appended to the shell rc survived an uninstall and kept
+  // starting the router forever.
+  removeAutostart();
   console.log(restored ? `${C.green}Uninstalled.${C.reset}` : `${C.yellow}Nothing to restore.${C.reset}`);
 }
 

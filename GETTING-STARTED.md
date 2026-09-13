@@ -287,7 +287,7 @@ Everything above works on all three. This is the same information collected in o
 | Fix `npm -g` permission errors | reopen PowerShell as **Administrator** | prefix with `sudo` | prefix with `sudo` |
 | Your home folder (`~`) | `C:\Users\YourName` | `/Users/YourName` | `/home/yourname` |
 | VSCode reload | `Ctrl`+`Shift`+`P` → Developer: Reload Window | `Cmd`+`Shift`+`P` → same | `Ctrl`+`Shift`+`P` → same |
-| Where autostart goes | a `.cmd` file in your Startup folder | a line in `~/.zshrc` | a line in `~/.bashrc` (or `~/.zshrc`) |
+| Where autostart goes | a `.cmd` file in your Startup folder | a marked block in `~/.zshrc` | a marked block in whichever rc your shell reads |
 | When autostart kicks in | when you log in to Windows | when you open a terminal | when you open a terminal |
 | Stop Claude Code | `Ctrl`+`C` twice, or `/exit` | `Ctrl`+`C` twice, or `/exit` | `Ctrl`+`C` twice, or `/exit` |
 
