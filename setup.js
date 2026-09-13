@@ -65,7 +65,9 @@ const CLAUDE_DIR = path.join(HOME, '.claude');
 const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 const CLAUDE_MD = path.join(CLAUDE_DIR, 'CLAUDE.md');
 const STATUSLINE = path.join(CLAUDE_DIR, 'statusline-openrouter.js');
-const STATE_FILE = path.join(CLAUDE_DIR, 'ccr-openrouter-state.json');
+const STATE_FILE = path.join(CLAUDE_DIR, 'openrouter-setup-state.json');
+// Older installs wrote this name; still read it so --on keeps working.
+const LEGACY_STATE_FILE = path.join(CLAUDE_DIR, 'ccr-openrouter-state.json');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -291,7 +293,7 @@ function routingEnv(key, cheap, dear) {
 
 const ROUTING_KEYS = Object.keys(routingEnv('', '', ''));
 
-function writeClaudeSettings(key, cheap, dear) {
+function writeClaudeSettings(key, cheap, dear, mutate) {
   const prev = readJson(CLAUDE_SETTINGS, {});
   const bak = backup(CLAUDE_SETTINGS);
 
@@ -304,6 +306,7 @@ function writeClaudeSettings(key, cheap, dear) {
 
   const next = { ...prev, env };
   next.statusLine = { type: 'command', command: `"${process.execPath}" "${STATUSLINE}"`, padding: 0 };
+  if (typeof mutate === 'function') mutate(next);
 
   if (next.model) {
     next.__parkedModel = next.model;
@@ -374,7 +377,16 @@ function main() {
 
   const cost = input.cost && typeof input.cost.total_cost_usd === 'number' ? input.cost.total_cost_usd : null;
 
+  // caveman ships its own statusline; rather than have two fight over the same
+  // slot, show its state as a badge here.
+  let caveman = null;
+  try {
+    const level = fs.readFileSync(path.join(os.homedir(), '.claude', '.caveman-active'), 'utf8').trim();
+    if (level) caveman = level.toUpperCase();
+  } catch {}
+
   const parts = [];
+  if (caveman) parts.push(C.yellow + '[CAVEMAN' + (caveman === 'FULL' ? '' : ':' + caveman) + ']' + C.reset);
   parts.push((routed ? C.green : C.yellow) + '●' + C.reset + ' ' + C.bold + short + C.reset +
              C.dim + ' (' + tier + ')' + C.reset);
   if (effort) parts.push(C.magenta + '⚙ ' + effort + C.reset);
@@ -477,28 +489,95 @@ function writeClaudeMd() {
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * Token savers. These are optional by design: a failure here must never take
- * the routing install down with it, because the routing is the part that
- * matters and these only make it cheaper.
+ * caveman — a prompt-compression hook. It strips articles, filler and
+ * pleasantries from replies while leaving code, commands and error strings
+ * exactly as they are, which cuts output tokens without losing substance.
+ *
+ * Shipped in extras/caveman and copied into ~/.claude/hooks. Pure Node
+ * builtins, no dependencies.
  */
-function installTokenSavers() {
-  const installed = [];
+const CAVEMAN_FILES = [
+  'caveman-activate.js',
+  'caveman-mode-tracker.js',
+  'caveman-config.js',
+  'cavecrew-model-overrides.js',
+  'caveman-stats.js',
+  'caveman-statusline.ps1',
+  'caveman-statusline.sh',
+  'package.json',
+];
 
-  // rtk — a CLI that trims the output of common dev commands before it reaches
-  // the model. Installed only if a source is configured; there is no public
-  // package under a name that is not already taken by something unrelated.
-  const rtkSource = process.env.RTK_INSTALL_URL || null;
-  if (rtkSource) {
-    const res = run('npm', ['install', '-g', rtkSource], { stdio: 'inherit' });
-    if (res.code === 0) installed.push('rtk');
-    else warn('rtk install failed — continuing without it');
-  } else if (run('rtk', ['--version']).code === 0) {
-    installed.push('rtk (already present)');
-  } else {
-    info('rtk not installed: set RTK_INSTALL_URL to a package or git URL to enable it');
+const HOOKS_DIR = path.join(CLAUDE_DIR, 'hooks');
+
+function installCaveman(settings) {
+  const src = path.join(__dirname, 'extras', 'caveman');
+  if (!fs.existsSync(src)) {
+    info('caveman not bundled with this copy — skipping');
+    return false;
   }
 
-  return installed;
+  fs.mkdirSync(HOOKS_DIR, { recursive: true });
+  let copied = 0;
+  for (const f of CAVEMAN_FILES) {
+    const from = path.join(src, f);
+    if (!fs.existsSync(from)) continue;
+    const to = path.join(HOOKS_DIR, f);
+    // Never clobber a newer local copy the user has edited themselves.
+    try {
+      if (fs.existsSync(to) && fs.statSync(to).mtimeMs > fs.statSync(from).mtimeMs) continue;
+      fs.copyFileSync(from, to);
+      copied++;
+    } catch (err) {
+      warn(`could not install ${f}: ${err.message}`);
+    }
+  }
+
+  // Register the two hooks, without disturbing any the user already has.
+  const node = process.execPath;
+  const wanted = [
+    ['SessionStart', path.join(HOOKS_DIR, 'caveman-activate.js'), 'Loading caveman mode...'],
+    ['UserPromptSubmit', path.join(HOOKS_DIR, 'caveman-mode-tracker.js'), 'Tracking caveman mode...'],
+  ];
+
+  settings.hooks = settings.hooks || {};
+  for (const [event, script, statusMessage] of wanted) {
+    settings.hooks[event] = settings.hooks[event] || [];
+    const already = JSON.stringify(settings.hooks[event]).includes(path.basename(script));
+    if (already) continue;
+    settings.hooks[event].push({
+      hooks: [{ type: 'command', command: `"${node}" "${script}"`, timeout: 5, statusMessage }],
+    });
+  }
+
+  ok(`caveman installed (${copied} files) — /caveman lite|full|ultra, or "stop caveman"`);
+  return true;
+}
+
+/**
+ * rtk is a separate tool and deliberately not bundled. The binary on the
+ * author's machine is a third-party Windows executable with no public source,
+ * and the name `rtk` on both npm and crates.io belongs to an unrelated project
+ * (reachingforthejack/rtk, "Rust Type Kit"). Installing that by name would give
+ * you the wrong program, so this only wires up a source you supply yourself.
+ */
+function installRtk() {
+  if (run('rtk', ['--version']).code === 0) {
+    ok('rtk already present');
+    return true;
+  }
+  const source = process.env.RTK_INSTALL_URL;
+  if (!source) {
+    info('rtk not installed — set RTK_INSTALL_URL to a package or git URL to enable it');
+    info('(do not `npm i -g rtk`: that name belongs to an unrelated project)');
+    return false;
+  }
+  const res = run('npm', ['install', '-g', source], { stdio: 'inherit' });
+  if (res.code !== 0) {
+    warn('rtk install failed — continuing without it');
+    return false;
+  }
+  ok('rtk installed');
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,7 +639,7 @@ function modeOff() {
 }
 
 function modeOn() {
-  const state = readJson(STATE_FILE, {});
+  const state = readJson(STATE_FILE, null) || readJson(LEGACY_STATE_FILE, {});
   if (!state.parked || !state.parked.ANTHROPIC_AUTH_TOKEN) {
     die('Nothing saved to switch back to.', 'Run a full install:  node setup.js --key sk-or-v1-...');
   }
@@ -721,17 +800,19 @@ async function install() {
   writeStatusline();
 
   say('Pointing Claude Code at OpenRouter (covers the CLI and the VSCode extension)');
-  writeClaudeSettings(key, cheap.id, dear.id);
+  const extras = !hasFlag('--no-extras');
+  writeClaudeSettings(key, cheap.id, dear.id, (settings) => {
+    if (extras) installCaveman(settings);
+  });
   ok(`${CLAUDE_SETTINGS} -> env.ANTHROPIC_BASE_URL = ${API_ROOT}`);
   info(`default ${cheap.id} | opus slot ${dear.id}`);
 
-  if (!hasFlag('--no-extras')) {
+  if (extras) {
     say('Writing plain-language instructions');
     writeClaudeMd();
 
     say('Token savers');
-    const savers = installTokenSavers();
-    if (savers.length) ok(savers.join(', '));
+    installRtk();
   }
 
   if (!hasFlag('--no-verify')) {

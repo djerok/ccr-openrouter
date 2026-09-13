@@ -1,9 +1,9 @@
-# ccr-openrouter
+# claude-openrouter
 
 Point Claude Code — the CLI **and** the VSCode extension — at OpenRouter models.
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...
+npx --allow-git=root github:djerok/claude-openrouter --key sk-or-v1-...
 ```
 
 Node >= 18, no npm dependencies, Windows / macOS / Linux.
@@ -11,10 +11,10 @@ Node >= 18, no npm dependencies, Windows / macOS / Linux.
 **No Node yet?** The line above is itself a Node program, so use a bootstrapper:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-...
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-...
 ```
 ```sh
-curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
+curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
 ```
 
 New to all of this? → **[GETTING-STARTED.md](GETTING-STARTED.md)**, written from a blank machine.
@@ -44,8 +44,8 @@ miss the extension.
 > That meant a native SQLite dependency, a background service, a port, and an autostart
 > entry, and every one of those was a way for the install to fail on someone's machine.
 > CCR 3.x also moved its config into a SQLite database, so the JSON config written by older
-> versions of this script stopped being read at all. None of it was needed. The repo keeps
-> its name; the proxy is gone.
+> versions of this script stopped being read at all. None of it was needed. The repo was
+> called `ccr-openrouter` while that was true; GitHub redirects the old URL.
 
 ## Models
 
@@ -90,17 +90,44 @@ to rather than overwritten, and `--uninstall` removes only that block.
 
 Skip it with `--no-extras`.
 
+## Token savers
+
+Two optional extras, both skippable with `--no-extras`.
+
+**caveman** is bundled and installed by default. It is a pair of Claude Code hooks that
+compress replies — articles, filler and pleasantries are dropped, while code, commands and
+error strings are left byte-for-byte intact. Fewer output tokens for the same content.
+
+```
+/caveman lite | full | ultra     switch level
+stop caveman                     turn it off
+```
+
+The statusline shows a `[CAVEMAN]` badge when it is active, so the two do not fight over
+the same slot.
+
+**rtk** is *not* bundled. It is a separate third-party CLI that filters command output
+before it reaches the model. There is no public source for it, and the name `rtk` on both
+npm and crates.io belongs to an unrelated project ("Rust Type Kit"), so installing it by
+name would give you the wrong program. If you have a source for it:
+
+```sh
+RTK_INSTALL_URL=<package-or-git-url> node setup.js --key sk-or-v1-...
+```
+
+An `rtk` already on your `PATH` is detected and left alone.
+
 ## Modes
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-...  # install
-npx --allow-git=root github:djerok/ccr-openrouter --status            # what is configured
-npx --allow-git=root github:djerok/ccr-openrouter --doctor            # diagnose, change nothing
-npx --allow-git=root github:djerok/ccr-openrouter --off               # back to your Anthropic account
-npx --allow-git=root github:djerok/ccr-openrouter --on                # back to OpenRouter
-npx --allow-git=root github:djerok/ccr-openrouter --uninstall         # restore the newest backup
-npx --allow-git=root github:djerok/ccr-openrouter --no-verify         # skip the live test
-npx --allow-git=root github:djerok/ccr-openrouter --no-extras         # skip CLAUDE.md and token savers
+npx --allow-git=root github:djerok/claude-openrouter --key sk-or-v1-...  # install
+npx --allow-git=root github:djerok/claude-openrouter --status            # what is configured
+npx --allow-git=root github:djerok/claude-openrouter --doctor            # diagnose, change nothing
+npx --allow-git=root github:djerok/claude-openrouter --off               # back to your Anthropic account
+npx --allow-git=root github:djerok/claude-openrouter --on                # back to OpenRouter
+npx --allow-git=root github:djerok/claude-openrouter --uninstall         # restore the newest backup
+npx --allow-git=root github:djerok/claude-openrouter --no-verify         # skip the live test
+npx --allow-git=root github:djerok/claude-openrouter --no-extras         # skip CLAUDE.md and token savers
 ```
 
 From a clone, use `node setup.js` in place of the `npx` part.

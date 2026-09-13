@@ -1,9 +1,9 @@
 {
-  "name": "ccr-openrouter",
+  "name": "claude-openrouter",
   "version": "1.0.0",
-  "description": "One command to point Claude Code (CLI + VSCode extension) at OpenRouter models, with a statusline that shows the model and reasoning effort actually used.",
+  "description": "Point Claude Code (CLI and VSCode extension) at OpenRouter models. No proxy, no daemon.",
   "bin": {
-    "ccr-openrouter": "setup.js"
+    "claude-openrouter": "setup.js"
   },
   "main": "setup.js",
   "type": "commonjs",
@@ -14,14 +14,17 @@
   "author": "DjErok",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/djerok/ccr-openrouter.git"
+    "url": "git+https://github.com/djerok/claude-openrouter.git"
   },
   "bugs": {
-    "url": "https://github.com/djerok/ccr-openrouter/issues"
+    "url": "https://github.com/djerok/claude-openrouter/issues"
   },
-  "homepage": "https://github.com/djerok/ccr-openrouter#readme",
+  "homepage": "https://github.com/djerok/claude-openrouter#readme",
   "files": [
     "setup.js",
+    "install.sh",
+    "install.ps1",
+    "extras/",
     "README.md",
     "GETTING-STARTED.md",
     "LICENSE"

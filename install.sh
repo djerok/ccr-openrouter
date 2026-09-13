@@ -1,13 +1,13 @@
 #!/bin/sh
 #
-# Bootstrap ccr-openrouter on a macOS or Linux machine that may have nothing
+# Bootstrap claude-openrouter on a macOS or Linux machine that may have nothing
 # installed.
 #
 # setup.js is a Node program, so it cannot install Node for itself. This script
 # can. It installs Node if it is missing or too old, downloads setup.js, and
 # runs it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
+#   curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
 #
 # Every argument after `--` is forwarded to setup.js, so --status, --off and
 # --on work the same way.
@@ -19,7 +19,7 @@
 set -eu
 
 MIN_NODE=18
-RAW_BASE="https://raw.githubusercontent.com/djerok/ccr-openrouter/main"
+RAW_BASE="https://raw.githubusercontent.com/djerok/claude-openrouter/main"
 
 if [ -t 1 ]; then
   R=$(printf '\033[31m'); G=$(printf '\033[32m'); Y=$(printf '\033[33m')
@@ -152,7 +152,7 @@ ok "npm $(npm --version)"
 # --- setup.js ---------------------------------------------------------------
 
 step 'Downloading setup.js'
-SETUP=$(mktemp /tmp/ccr-openrouter-setup.XXXXXX.js)
+SETUP=$(mktemp /tmp/claude-openrouter-setup.XXXXXX.js)
 trap 'rm -f "$SETUP"' EXIT INT TERM
 fetch "$RAW_BASE/setup.js" "$SETUP" \
   || fail 'Could not download setup.js.' 'Check your network or proxy, then re-run.'

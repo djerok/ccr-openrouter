@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Bootstrap ccr-openrouter on a Windows machine that may have nothing installed.
+  Bootstrap claude-openrouter on a Windows machine that may have nothing installed.
 
 .DESCRIPTION
   setup.js is a Node program, so it cannot install Node for you. This script can.
@@ -10,11 +10,11 @@
 
   Run it with:
 
-    irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1 | iex
 
   or, to pass your key in one go (recommended):
 
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-...
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-...
 
   Anything after -Key is forwarded to setup.js, so -Status, -Off and -On work too.
 
@@ -31,13 +31,13 @@ param(
   [switch]$Off,
   [switch]$On,
   [switch]$Uninstall,
-  [switch]$NoAutostart,
+  [switch]$Doctor,
   [switch]$NoVerify
 )
 
 $ErrorActionPreference = 'Stop'
 $MinNode = 18
-$RawBase = 'https://raw.githubusercontent.com/djerok/ccr-openrouter/main'
+$RawBase = 'https://raw.githubusercontent.com/djerok/claude-openrouter/main'
 
 function Write-Step($m) { Write-Host "[*] $m" -ForegroundColor Cyan }
 function Write-Ok  ($m) { Write-Host "    ok   $m" -ForegroundColor Green }
@@ -146,7 +146,7 @@ Write-Ok "npm $(& npm --version)"
 # --- setup.js ---------------------------------------------------------------
 
 Write-Step 'Downloading setup.js'
-$setup = Join-Path $env:TEMP 'ccr-openrouter-setup.js'
+$setup = Join-Path $env:TEMP 'claude-openrouter-setup.js'
 try {
   Invoke-WebRequest -Uri "$RawBase/setup.js" -OutFile $setup -UseBasicParsing
 } catch {
@@ -169,10 +169,10 @@ if ($Status)      { $fwd += '--status' }
 if ($Off)         { $fwd += '--off' }
 if ($On)          { $fwd += '--on' }
 if ($Uninstall)   { $fwd += '--uninstall' }
-if ($NoAutostart) { $fwd += '--no-autostart' }
+if ($Doctor)      { $fwd += '--doctor' }
 if ($NoVerify)    { $fwd += '--no-verify' }
 
-if (-not $Key -and -not ($Status -or $Off -or $On -or $Uninstall)) {
+if (-not $Key -and -not ($Status -or $Off -or $On -or $Uninstall -or $Doctor)) {
   Write-Warn 'No OpenRouter key given. setup.js will ask for one.'
   Write-Host '    Re-run as: ... -Key sk-or-v1-...' -ForegroundColor DarkGray
 }

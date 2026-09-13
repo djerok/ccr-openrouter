@@ -57,13 +57,13 @@ yours is too old), then runs the setup. Skip to Step 3, get your key, then come 
 **Windows**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-YOUR-KEY-HERE
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-YOUR-KEY-HERE
 ```
 
 **macOS / Linux**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-YOUR-KEY-HERE
+curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-YOUR-KEY-HERE
 ```
 
 If you would rather do it a step at a time, or that command fails, carry on below — the
@@ -139,7 +139,7 @@ There is nothing to download. Replace `sk-or-v1-YOUR-KEY-HERE` with the key you 
 Step 3, then paste this and press `Enter`:
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --key sk-or-v1-YOUR-KEY-HERE
+npx --allow-git=root github:djerok/claude-openrouter --key sk-or-v1-YOUR-KEY-HERE
 ```
 
 `npx` comes with Node, and fetches the program straight from GitHub each time you run it.
@@ -219,10 +219,10 @@ does, which is why one setup covered both.
 Same shape as the install — `npx` again, from any folder:
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --status      # what is routed where, is the router running
-npx --allow-git=root github:djerok/ccr-openrouter --off         # switch back to your normal Anthropic account
-npx --allow-git=root github:djerok/ccr-openrouter --on          # switch back to OpenRouter
-npx --allow-git=root github:djerok/ccr-openrouter --uninstall   # undo everything, restore your original settings
+npx --allow-git=root github:djerok/claude-openrouter --status      # what is routed where, is the router running
+npx --allow-git=root github:djerok/claude-openrouter --off         # switch back to your normal Anthropic account
+npx --allow-git=root github:djerok/claude-openrouter --on          # switch back to OpenRouter
+npx --allow-git=root github:djerok/claude-openrouter --uninstall   # undo everything, restore your original settings
 ```
 
 After `--off` or `--on`, open a new terminal / reload VSCode for it to take effect.
@@ -254,7 +254,7 @@ That switches to GLM. `/model sonnet` puts you back on the cheap one.
 ### Ask the setup what is wrong
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --doctor
+npx --allow-git=root github:djerok/claude-openrouter --doctor
 ```
 
 It changes nothing. It prints your Node and npm versions, whether Claude Code and the
@@ -263,7 +263,7 @@ listening, and whether OpenRouter is reachable from your network. **It prints no
 it is safe to paste into an issue.
 
 Still stuck? Open an issue at
-<https://github.com/djerok/ccr-openrouter/issues> and paste the full output — but **delete
+<https://github.com/djerok/claude-openrouter/issues> and paste the full output — but **delete
 your API key from anything you paste.**
 
 ---
@@ -287,7 +287,7 @@ Everything above works on all three. This is the same information collected in o
 systems. If something looks wrong, ask the setup to check itself:
 
 ```sh
-npx --allow-git=root github:djerok/ccr-openrouter --doctor
+npx --allow-git=root github:djerok/claude-openrouter --doctor
 ```
 
 ---
