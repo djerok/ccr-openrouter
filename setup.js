@@ -24,7 +24,10 @@
  *   node setup.js --on                 # back to OpenRouter
  *   node setup.js --uninstall          # restore the newest backup
  *   node setup.js --no-verify          # skip the live test request
- *   node setup.js --no-extras          # skip CLAUDE.md and the token savers
+ *   node setup.js --no-extras          # skip CLAUDE.md, caveman and rtk
+ *   node setup.js --no-launch          # do not start Claude Code when finished
+ *   node setup.js --no-autoupdate      # do not check GitHub for updates at session start
+ *   node setup.js --quiet              # no output except warnings (used by the updater)
  *
  * Requires Node >= 18 (global fetch). No npm dependencies.
  */
@@ -65,6 +68,9 @@ const CLAUDE_DIR = path.join(HOME, '.claude');
 const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 const CLAUDE_MD = path.join(CLAUDE_DIR, 'CLAUDE.md');
 const STATUSLINE = path.join(CLAUDE_DIR, 'statusline-openrouter.js');
+const AUTOUPDATE = path.join(CLAUDE_DIR, 'hooks', 'openrouter-autoupdate.js');
+const REPO = 'djerok/claude-openrouter';
+const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
 const STATE_FILE = path.join(CLAUDE_DIR, 'openrouter-setup-state.json');
 // Older installs wrote this name; still read it so --on keeps working.
 const LEGACY_STATE_FILE = path.join(CLAUDE_DIR, 'ccr-openrouter-state.json');
@@ -88,10 +94,14 @@ const C = {
 };
 
 let step = 0;
-const say = (m) => console.log(`${C.cyan}[${++step}]${C.reset} ${m}`);
-const ok = (m) => console.log(`    ${C.green}ok${C.reset}   ${m}`);
+// --quiet exists for the auto-update hook, which reinstalls in the background
+// and must not scribble over a live terminal. Warnings still print.
+const QUIET = argv.includes('--quiet');
+const out = (m) => { if (!QUIET) console.log(m); };
+const say = (m) => out(`${C.cyan}[${++step}]${C.reset} ${m}`);
+const ok = (m) => out(`    ${C.green}ok${C.reset}   ${m}`);
 const warn = (m) => console.log(`    ${C.yellow}warn${C.reset} ${m}`);
-const info = (m) => console.log(`    ${C.dim}${m}${C.reset}`);
+const info = (m) => out(`    ${C.dim}${m}${C.reset}`);
 
 function die(msg, hint) {
   console.error(`\n${C.red}fatal:${C.reset} ${msg}`);
@@ -148,9 +158,16 @@ function checkNode() {
   ok(`node ${process.versions.node}`);
 }
 
+/** Returns { version, path } for Claude Code, or null. */
 function probeClaude() {
   const res = run('claude', ['--version']);
-  if (res.code === 0 && res.stdout) return res.stdout.split('\n')[0];
+  if (res.code === 0 && res.stdout) {
+    // Resolve the real file so the path printed at the end is something the
+    // user can actually click, copy or hand to a bug report.
+    const which = IS_WIN ? run('where', ['claude']) : run('which', ['claude']);
+    const resolved = which.code === 0 && which.stdout ? which.stdout.split('\n')[0].trim() : 'claude';
+    return { version: res.stdout.split('\n')[0], path: resolved };
+  }
   const prefix = run('npm', ['prefix', '-g']).stdout;
   if (prefix) {
     const cands = IS_WIN
@@ -159,7 +176,7 @@ function probeClaude() {
     for (const c of cands) {
       if (!fs.existsSync(c)) continue;
       const r = run(c, ['--version']);
-      if (r.code === 0 && r.stdout) return r.stdout.split('\n')[0];
+      if (r.code === 0 && r.stdout) return { version: r.stdout.split('\n')[0], path: c };
     }
   }
   return null;
@@ -167,7 +184,10 @@ function probeClaude() {
 
 function ensureClaudeCode() {
   const v = probeClaude();
-  if (v) return ok(`Claude Code present (${v})`);
+  if (v) {
+    ok(`Claude Code present (${v.version})`);
+    return v;
+  }
 
   info('Claude Code not found — installing @anthropic-ai/claude-code globally');
   const res = run('npm', ['install', '-g', '@anthropic-ai/claude-code'], { stdio: 'inherit' });
@@ -186,7 +206,8 @@ function ensureClaudeCode() {
       `Add your npm global bin directory to PATH and open a new terminal:\n  ${run('npm', ['prefix', '-g']).stdout}`
     );
   }
-  ok(`Claude Code installed (${after})`);
+  ok(`Claude Code installed (${after.version})`);
+  return after;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +532,189 @@ function writeClaudeMd() {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// ---------------------------------------------------------------------------
+// Auto-update
+// ---------------------------------------------------------------------------
+
+/**
+ * A SessionStart hook that keeps this setup current.
+ *
+ * Hooks block the start of a Claude Code session, so this one does almost
+ * nothing: it rate-limits itself, then detaches a child process and returns.
+ * The child does the network call and any reinstall, and the result lands on
+ * the next session. Nothing here can delay, or fail, the session you are
+ * starting — every path swallows its errors on purpose.
+ */
+const AUTOUPDATE_SOURCE = String.raw`#!/usr/bin/env node
+/**
+ * openrouter-autoupdate.js — generated by setup.js. Re-run the installer to change it.
+ *
+ * SessionStart: checks GitHub for a newer commit of the setup and reapplies it.
+ * Detaches immediately so it can never slow down or break a session.
+ */
+'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const REPO = '__REPO__';
+const RAW_BASE = '__RAW_BASE__';
+const CHECK_EVERY_MS = 6 * 60 * 60 * 1000; // six hours
+const DIR = path.join(os.homedir(), '.claude');
+const STATE = path.join(DIR, 'openrouter-setup-state.json');
+const LOG = path.join(DIR, 'openrouter-autoupdate.log');
+
+function readState() {
+  try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; }
+}
+function writeState(s) {
+  try { fs.writeFileSync(STATE, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 }); } catch {}
+}
+function log(msg) {
+  try { fs.appendFileSync(LOG, new Date().toISOString() + ' ' + msg + '\n'); } catch {}
+}
+
+// --- child: the part that is allowed to take time -------------------------
+async function runCheck() {
+  const state = readState();
+  state.lastCheck = Date.now();
+  writeState(state);
+
+  let sha;
+  try {
+    const res = await fetch('https://api.github.com/repos/' + REPO + '/commits/main', {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'claude-openrouter-autoupdate' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return log('check failed: HTTP ' + res.status);
+    sha = (await res.json()).sha;
+  } catch (err) {
+    return log('check failed: ' + err.message);
+  }
+  if (!sha) return log('check failed: no sha in response');
+
+  if (sha === state.sha) {
+    state.sha = sha;
+    writeState(state);
+    return log('up to date (' + sha.slice(0, 7) + ')');
+  }
+
+  log('update available: ' + String(state.sha).slice(0, 7) + ' -> ' + sha.slice(0, 7));
+
+  let code;
+  try {
+    const res = await fetch(RAW_BASE + '/setup.js', { signal: AbortSignal.timeout(30000) });
+    if (!res.ok) return log('download failed: HTTP ' + res.status);
+    code = await res.text();
+  } catch (err) {
+    return log('download failed: ' + err.message);
+  }
+  // Guard against a proxy handing back an error page.
+  if (code.length < 5000 || !code.includes('ANTHROPIC_BASE_URL')) {
+    return log('downloaded file did not look like setup.js');
+  }
+
+  const tmp = path.join(os.tmpdir(), 'claude-openrouter-update-' + Date.now() + '.js');
+  try {
+    fs.writeFileSync(tmp, code);
+  } catch (err) {
+    return log('could not write temp file: ' + err.message);
+  }
+
+  await new Promise((resolve) => {
+    const child = spawn(process.execPath, [tmp, '--no-verify', '--no-launch', '--quiet'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (out += d));
+    child.on('close', (c) => {
+      log('reinstall exited ' + c);
+      if (out.trim()) log('  ' + out.trim().split('\n').slice(-4).join('\n  '));
+      if (c === 0) {
+        const s = readState();
+        s.sha = sha;
+        writeState(s);
+      }
+      resolve();
+    });
+    child.on('error', (err) => { log('reinstall failed: ' + err.message); resolve(); });
+  });
+
+  try { fs.unlinkSync(tmp); } catch {}
+}
+
+// --- parent: must return instantly ----------------------------------------
+if (process.argv includes_marker) {}
+`;
+
+function autoupdateSource() {
+  // Assembled rather than templated so the child-mode dispatch stays readable.
+  const body = AUTOUPDATE_SOURCE
+    .replace('__REPO__', REPO)
+    .replace('__RAW_BASE__', RAW_BASE)
+    .replace('if (process.argv includes_marker) {}', `
+if (process.argv[2] === '--run') {
+  runCheck().catch((err) => log('unexpected: ' + err.message));
+} else {
+  // Parent path: rate-limit, detach, exit. Never block the session.
+  try {
+    const state = readState();
+    const due = !state.lastCheck || Date.now() - state.lastCheck > CHECK_EVERY_MS;
+    if (due) {
+      const child = spawn(process.execPath, [__filename, '--run'], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    }
+  } catch {}
+  process.exit(0);
+}`.trim());
+  return body;
+}
+
+function installAutoupdate(settings, sha) {
+  fs.mkdirSync(path.dirname(AUTOUPDATE), { recursive: true });
+  fs.writeFileSync(AUTOUPDATE, autoupdateSource(), { mode: 0o755 });
+
+  settings.hooks = settings.hooks || {};
+  settings.hooks.SessionStart = settings.hooks.SessionStart || [];
+  const already = JSON.stringify(settings.hooks.SessionStart).includes('openrouter-autoupdate');
+  if (!already) {
+    settings.hooks.SessionStart.push({
+      hooks: [{
+        type: 'command',
+        command: `"${process.execPath}" "${AUTOUPDATE}"`,
+        timeout: 5,
+        statusMessage: 'Checking for setup updates...',
+      }],
+    });
+  }
+
+  const state = readJson(STATE_FILE, {});
+  state.sha = sha || state.sha || null;
+  state.lastCheck = Date.now();
+  writeJson(STATE_FILE, state);
+
+  ok(`auto-update installed${sha ? ` (pinned at ${sha.slice(0, 7)})` : ''}`);
+}
+
+/** Current commit on main, or null if GitHub is unreachable. */
+async function currentSha() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/commits/main`, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'claude-openrouter-setup' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()).sha || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * caveman — a prompt-compression hook. It strips articles, filler and
  * pleasantries from replies while leaving code, commands and error strings
@@ -710,7 +914,7 @@ async function modeDoctor() {
   const npmV = run('npm', ['--version']).stdout;
   line('npm', npmV || 'MISSING', Boolean(npmV));
   const cc = probeClaude();
-  line('claude code', cc || 'MISSING', Boolean(cc));
+  line('claude code', cc ? `${cc.version}  ${cc.path}` : 'MISSING', Boolean(cc));
 
   const s = readJson(CLAUDE_SETTINGS, {});
   const env = s.env || {};
@@ -803,7 +1007,7 @@ async function install() {
 
   say('Checking prerequisites');
   checkNode();
-  ensureClaudeCode();
+  const claudeBin = ensureClaudeCode();
 
   const key = resolveKey();
 
@@ -832,8 +1036,10 @@ async function install() {
     cheap.context_length || 200000,
     dear.context_length || 200000
   );
+  const sha = await currentSha();
   writeClaudeSettings(key, cheap.id, dear.id, contextTokens, (settings) => {
     if (extras) installCaveman(settings);
+    if (!hasFlag('--no-autoupdate')) installAutoupdate(settings, sha);
   });
   ok(`${CLAUDE_SETTINGS} -> env.ANTHROPIC_BASE_URL = ${API_ROOT}`);
   info(`default ${cheap.id} | opus slot ${dear.id}`);
@@ -860,13 +1066,42 @@ async function install() {
     }
   }
 
+  const target = claudeBin ? claudeBin.path : 'claude';
+
   console.log(`\n${C.green}${C.bold}Done.${C.reset}\n`);
-  console.log(`  ${C.bold}CLI:${C.reset}     open a NEW terminal and run  ${C.cyan}claude${C.reset}`);
-  console.log(`  ${C.bold}VSCode:${C.reset}  reload the window (Ctrl+Shift+P -> "Developer: Reload Window")\n`);
-  console.log(`  everyday model : ${cheap.id}`);
-  console.log(`  when you need more: ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
-  console.log(`  back to Anthropic : node setup.js --off\n`);
-  console.log(`  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
+  console.log(`  ${C.bold}claude:${C.reset}             ${target}`);
+  console.log(`  ${C.bold}settings:${C.reset}           ${CLAUDE_SETTINGS}`);
+  console.log(`  everyday model     : ${cheap.id}`);
+  console.log(`  when you need more : ${C.cyan}/model opus${C.reset} -> ${dear.id}`);
+  console.log(`  back to Anthropic  : node setup.js --off`);
+  console.log(`  ${C.bold}VSCode:${C.reset}             reload the window (Ctrl+Shift+P -> "Developer: Reload Window")`);
+  console.log(`\n  ${C.dim}No proxy, no background service, nothing to keep running.${C.reset}`);
+
+  // Auto-launch. The point of this script is that one pasted line ends with a
+  // working Claude Code, so finishing at a shell prompt with homework ("now
+  // open a new terminal") is a worse ending than simply starting it.
+  if (hasFlag('--no-launch') || QUIET) {
+    console.log(`\n  ${C.dim}Start it with:${C.reset} ${C.cyan}claude${C.reset}`);
+    return;
+  }
+  if (!process.stdout.isTTY) {
+    console.log(`\n  ${C.dim}Not an interactive terminal, so not launching. Run:${C.reset} ${C.cyan}claude${C.reset}`);
+    return;
+  }
+
+  console.log(`\n  ${C.cyan}Starting Claude Code...${C.reset}\n`);
+  const res = spawnSync(target, [], {
+    stdio: 'inherit',
+    // The settings file is written already and a fresh process reads it, but
+    // passing the same variables here means this very first session is routed
+    // even if something is odd about how settings are picked up.
+    env: { ...process.env, ...routingEnv(key, cheap.id, dear.id, contextTokens) },
+    shell: IS_WIN && !/\.exe$/i.test(target),
+  });
+  if (res.error) {
+    warn(`could not start Claude Code automatically: ${res.error.message}`);
+    console.log(`  Start it yourself with: ${C.cyan}claude${C.reset}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

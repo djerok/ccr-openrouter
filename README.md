@@ -134,6 +134,21 @@ RTK_INSTALL_URL=<package-or-git-url> node setup.js --key sk-or-v1-...
 
 An `rtk` already on your `PATH` is detected and left alone.
 
+## It starts itself, and keeps itself current
+
+When the install finishes it **launches Claude Code for you** — one pasted line takes you
+from a blank machine to a working session, with no "now open a new terminal" homework. It
+also prints the resolved path of the `claude` executable and of your settings file, so you
+always know exactly what was configured and where. Pass `--no-launch` to stay at the shell.
+
+It also installs a **SessionStart hook that keeps itself up to date**. Every time you start
+Claude Code it checks — at most once every six hours — whether this repo has a newer commit,
+and if so reapplies the setup in the background. The hook itself does almost nothing: it
+rate-limits, detaches a child process and returns immediately, so it can never slow down or
+break the session you are starting. Every path swallows its own errors by design. The
+result lands on your next session, and a log of what happened is at
+`~/.claude/openrouter-autoupdate.log`. Pass `--no-autoupdate` to skip it.
+
 ## Modes
 
 ```sh
@@ -144,7 +159,9 @@ npx --allow-git=root github:djerok/claude-openrouter --off               # back 
 npx --allow-git=root github:djerok/claude-openrouter --on                # back to OpenRouter
 npx --allow-git=root github:djerok/claude-openrouter --uninstall         # restore the newest backup
 npx --allow-git=root github:djerok/claude-openrouter --no-verify         # skip the live test
-npx --allow-git=root github:djerok/claude-openrouter --no-extras         # skip CLAUDE.md and token savers
+npx --allow-git=root github:djerok/claude-openrouter --no-extras         # skip CLAUDE.md, caveman, rtk
+npx --allow-git=root github:djerok/claude-openrouter --no-launch         # do not start Claude Code at the end
+npx --allow-git=root github:djerok/claude-openrouter --no-autoupdate     # do not self-update on session start
 ```
 
 From a clone, use `node setup.js` in place of the `npx` part.
