@@ -3,7 +3,8 @@
 This guide assumes **nothing is installed** and that you may never have used a terminal
 before. Follow it top to bottom. Every command is meant to be copied and pasted exactly.
 
-Total time: about 15 minutes, most of it waiting for downloads.
+Total time: about 15 minutes, most of it waiting for downloads. The install itself is a
+single command — most of this guide is getting your machine ready to run it.
 
 ---
 
@@ -109,27 +110,17 @@ it can spend your credit.
 
 ---
 
-## Step 4 — Download this project
+## Step 4 — Run the setup
+
+There is nothing to download. Replace `sk-or-v1-YOUR-KEY-HERE` with the key you copied in
+Step 3, then paste this and press `Enter`:
 
 ```sh
-git clone https://github.com/djerok/ccr-openrouter.git
-cd ccr-openrouter
+npx github:djerok/ccr-openrouter --key sk-or-v1-YOUR-KEY-HERE
 ```
 
-> **No `git`?** Go to <https://github.com/djerok/ccr-openrouter>, click the green **Code**
-> button → **Download ZIP**, unzip it, then in your terminal type `cd ` (with a space) and
-> drag the unzipped folder onto the terminal window — it fills in the path for you. Press
-> `Enter`.
-
----
-
-## Step 5 — Run the setup
-
-Replace `sk-or-v1-YOUR-KEY-HERE` with the key you copied in Step 3, then run:
-
-```sh
-node setup.js --key sk-or-v1-YOUR-KEY-HERE
-```
+`npx` comes with Node, and fetches the program straight from GitHub each time you run it.
+The first time it may ask `Ok to proceed? (y)` — type `y` and press `Enter`.
 
 This takes a few minutes. It prints numbered steps as it goes. It will:
 
@@ -154,7 +145,7 @@ If it stops with a red `fatal:` line, read it — it says what to do next. See
 
 ---
 
-## Step 6 — Use it in the terminal
+## Step 5 — Use it in the terminal
 
 **Open a brand-new terminal window** (the settings do not apply to the one you just used),
 then:
@@ -180,7 +171,7 @@ To leave, type `/exit` or press `Ctrl`+`C` twice.
 
 ---
 
-## Step 7 — Use it in VSCode
+## Step 6 — Use it in VSCode
 
 1. Install VSCode from <https://code.visualstudio.com> if you do not have it.
 2. Open VSCode, click the **Extensions** icon in the left bar (four squares), search for
@@ -198,13 +189,13 @@ does, which is why one setup covered both.
 
 ## Everyday commands
 
-Run these from inside the `ccr-openrouter` folder:
+Same shape as the install — `npx` again, from any folder:
 
 ```sh
-node setup.js --status      # what is routed where, and is the router running
-node setup.js --off         # switch back to your normal Anthropic account
-node setup.js --on          # switch back to OpenRouter
-node setup.js --uninstall   # undo everything, restore your original settings
+npx github:djerok/ccr-openrouter --status      # what is routed where, is the router running
+npx github:djerok/ccr-openrouter --off         # switch back to your normal Anthropic account
+npx github:djerok/ccr-openrouter --on          # switch back to OpenRouter
+npx github:djerok/ccr-openrouter --uninstall   # undo everything, restore your original settings
 ```
 
 After `--off` or `--on`, open a new terminal / reload VSCode for it to take effect.
@@ -224,6 +215,8 @@ To change model in the middle of a conversation, type this into Claude Code:
 | `'node' is not recognized` / `command not found: node` | Node is not installed, or the terminal was open before you installed it | Close the terminal, open a new one, try again. Still failing → redo Step 2 |
 | `Node vX is too old` | Node is installed but below version 18 | Install the LTS version from <https://nodejs.org> |
 | `No OpenRouter API key.` | You forgot `--key`, or pasted it wrong | Re-run with `--key sk-or-v1-...`. The key has no spaces and no quotes around it |
+| `npx` asks `Ok to proceed? (y)` | Normal — it is confirming the download | Type `y`, press `Enter` |
+| `npm error 404 ... github:djerok` | Typo in the command, or no internet | Check the spelling of `github:djerok/ccr-openrouter` |
 | `OpenRouter rejected the key (401)` | Wrong key, deleted key, or **no credit on the account** | Check <https://openrouter.ai/keys> and <https://openrouter.ai/settings/credits> |
 | `npm install -g ... failed` on Windows | No permission to write to the global folder | Right-click PowerShell → **Run as Administrator**, then re-run the setup |
 | `npm install -g ... failed` on macOS/Linux | Same, permissions | `sudo npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router`, then re-run the setup |
@@ -263,7 +256,7 @@ may report that it cannot connect. Fix it by opening a terminal once (that start
 router), then reloading the VSCode window. To check at any time:
 
 ```sh
-node setup.js --status
+npx github:djerok/ccr-openrouter --status
 ```
 
 The last line tells you whether the router is running.

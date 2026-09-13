@@ -5,8 +5,12 @@ One command points a fresh [Claude Code](https://github.com/anthropics/claude-co
 you which model actually answered.
 
 ```sh
-node setup.js --key sk-or-v1-...
+npx github:djerok/ccr-openrouter --key sk-or-v1-...
 ```
+
+That is the whole install — no clone, no download, nothing to keep. `npx` fetches and runs
+it. If you would rather read the code first, clone the repo and run `node setup.js --key ...`
+instead; they are identical.
 
 No npm dependencies. Node >= 18. Windows, macOS, Linux.
 
@@ -70,14 +74,16 @@ and is not a sign that anything is broken. The bottom statusline is the truthful
 ## Modes
 
 ```sh
-node setup.js --key sk-or-v1-...   # install
-node setup.js --status             # what is routed where, is the router up
-node setup.js --off                # back to your Anthropic account (restores a pinned model)
-node setup.js --on                 # re-enable routing
-node setup.js --uninstall          # restore newest backups, remove statusline + autostart
-node setup.js --no-autostart       # skip the OS startup entry
-node setup.js --no-verify          # skip the live round-trip test
+npx github:djerok/ccr-openrouter --key sk-or-v1-...   # install
+npx github:djerok/ccr-openrouter --status             # what is routed where, is the router up
+npx github:djerok/ccr-openrouter --off                # back to your Anthropic account
+npx github:djerok/ccr-openrouter --on                 # re-enable routing
+npx github:djerok/ccr-openrouter --uninstall          # restore backups, remove statusline + autostart
+npx github:djerok/ccr-openrouter --no-autostart       # skip the OS startup entry
+npx github:djerok/ccr-openrouter --no-verify          # skip the live round-trip test
 ```
+
+From a clone, swap `npx github:djerok/ccr-openrouter` for `node setup.js` in any of the above.
 
 Key precedence: `--key` → `$OPENROUTER_API_KEY` → the key already in your CCR config.
 There is no baked-in default, on purpose.
