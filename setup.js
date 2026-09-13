@@ -37,7 +37,7 @@
  *   node setup.js --trim               # see/disable MCP servers (they cost tokens every request)
  *   node setup.js --untrim             # put the MCP servers back
  *   node setup.js --usage              # token and spend totals
- *   node setup.js --no-usagelog        # do not log per-turn usage
+ *   node setup.js --usagelog           # log per-turn tokens to a file (off by default)
  *   node setup.js --quiet              # no output except warnings (used by the updater)
  *
  * Requires Node >= 18 (global fetch). No npm dependencies.
@@ -133,6 +133,35 @@ function readJson(file, fallback) {
 function writeJson(file, obj) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+}
+
+/**
+ * Write a file this script generates, refusing to write it if it is not valid
+ * JavaScript.
+ *
+ * These files are built from template literals inside this one, so an escaping
+ * mistake here produces a syntactically broken hook that fails on every single
+ * turn — which is exactly what happened: a newline escape collapsed into a real
+ * line break inside a string, and the Stop hook errored for everyone who
+ * installed it. The generator cannot be trusted to be correct by inspection, so
+ * it is checked before it reaches disk.
+ */
+function writeGenerated(file, source, label) {
+  // Drop a leading shebang, which is valid in a script but not in a Function body.
+  const lines = source.split(String.fromCharCode(10));
+  if (lines[0].startsWith('#!')) lines.shift();
+  const body = lines.join(String.fromCharCode(10));
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function(body);
+  } catch (err) {
+    die(
+      `generated ${label} is not valid JavaScript: ${err.message}`,
+      `This is a bug in the installer, not in your setup. Please report it at https://github.com/${REPO}/issues`
+    );
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, source, { mode: 0o755 });
 }
 
 function backup(file) {
@@ -475,8 +504,7 @@ try { main(); } catch (err) {
 `;
 
 function writeStatusline() {
-  fs.mkdirSync(CLAUDE_DIR, { recursive: true });
-  fs.writeFileSync(STATUSLINE, STATUSLINE_SOURCE, { mode: 0o755 });
+  writeGenerated(STATUSLINE, STATUSLINE_SOURCE, 'statusline');
   ok(`statusline written to ${STATUSLINE}`);
 }
 
@@ -841,26 +869,42 @@ function record(raw) {
       cwd: (input.workspace && input.workspace.current_dir) || null,
       ...numbers,
     };
-    fs.appendFileSync(LOG, JSON.stringify(row) + '
-');
+    fs.appendFileSync(LOG, JSON.stringify(row) + String.fromCharCode(10));
   } catch {
     // Accounting must never break a turn.
   }
 }
 
 let buf = '';
+let done = false;
+function finish() {
+  if (done) return;
+  done = true;
+  record(buf);
+  // Let go of stdin so the process can exit. Without this it stays alive for as
+  // long as the writer holds the pipe open, which is what trips the host's hook
+  // timeout. The payload has already been received by this point; this is not
+  // the same as the earlier bug, which killed the process mid-write.
+  try { process.stdin.pause(); } catch {}
+}
+
+// Wait for stdin, but never wait long. Claude Code gives a hook a few seconds
+// and reports a hook error if it outlives that, so this writes what it has and
+// ends rather than holding the turn open waiting for a stream to close.
+const guard = setTimeout(finish, 1500);
+if (typeof guard.unref === 'function') guard.unref();
+
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => { buf += c; });
-process.stdin.on('error', () => {});
-process.stdin.on('end', () => record(buf));
+process.stdin.on('error', finish);
+process.stdin.on('end', () => { clearTimeout(guard); finish(); });
 `;
 
 const USAGE_HOOK = path.join(CLAUDE_DIR, 'hooks', 'openrouter-usage.js');
 const USAGE_LOG = path.join(CLAUDE_DIR, 'openrouter-usage.jsonl');
 
 function installUsageLog(settings) {
-  fs.mkdirSync(path.dirname(USAGE_HOOK), { recursive: true });
-  fs.writeFileSync(USAGE_HOOK, USAGE_HOOK_SOURCE, { mode: 0o755 });
+  writeGenerated(USAGE_HOOK, USAGE_HOOK_SOURCE, 'usage hook');
 
   settings.hooks = settings.hooks || {};
   settings.hooks.Stop = settings.hooks.Stop || [];
@@ -870,6 +914,25 @@ function installUsageLog(settings) {
     });
   }
   ok(`usage logging installed -> ${USAGE_LOG}`);
+}
+
+function removeUsageLog(settings) {
+  let touched = false;
+  if (settings.hooks && settings.hooks.Stop) {
+    const before = JSON.stringify(settings.hooks.Stop);
+    settings.hooks.Stop = settings.hooks.Stop.filter(
+      (e) => !JSON.stringify(e).includes('openrouter-usage')
+    );
+    if (JSON.stringify(settings.hooks.Stop) !== before) touched = true;
+    if (!settings.hooks.Stop.length) delete settings.hooks.Stop;
+  }
+  try {
+    if (fs.existsSync(USAGE_HOOK)) {
+      fs.unlinkSync(USAGE_HOOK);
+      touched = true;
+    }
+  } catch {}
+  if (touched) ok('per-turn usage logging removed (--usagelog to keep it)');
 }
 
 /** Live spend straight from OpenRouter, which is the authoritative number. */
@@ -1149,8 +1212,7 @@ if (process.argv[2] === '--run') {
 }
 
 function installAutoupdate(settings, sha) {
-  fs.mkdirSync(path.dirname(AUTOUPDATE), { recursive: true });
-  fs.writeFileSync(AUTOUPDATE, autoupdateSource(), { mode: 0o755 });
+  writeGenerated(AUTOUPDATE, autoupdateSource(), 'auto-update hook');
 
   settings.hooks = settings.hooks || {};
   settings.hooks.SessionStart = settings.hooks.SessionStart || [];
@@ -1538,7 +1600,11 @@ async function install() {
   writeClaudeSettings(key, cheap.id, dear.id, contextTokens, (settings) => {
     if (extras) installCaveman(settings);
     else removePromptExtras(settings);
-    if (!hasFlag('--no-usagelog')) installUsageLog(settings);
+    // Opt-in. It is only accounting, and it has already cost two user-visible
+    // problems — a broken pipe that ate replies, and hook timeouts. Nothing
+    // that merely reports on the work should be able to disturb the work.
+    if (hasFlag('--usagelog')) installUsageLog(settings);
+    else removeUsageLog(settings);
     if (!hasFlag('--no-autoupdate')) installAutoupdate(settings, sha);
   });
   ok(`${CLAUDE_SETTINGS} -> env.ANTHROPIC_BASE_URL = ${API_ROOT}`);
