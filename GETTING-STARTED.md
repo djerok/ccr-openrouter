@@ -49,15 +49,32 @@ To paste into a terminal: **Windows** right-click, or `Ctrl`+`V`. **macOS** `Cmd
 
 ---
 
-## Shortcut — let it install Node for you
+## Step 2 — Get an OpenRouter API key
 
-Steps 2 and 4 can be done in one command. It installs Node if you do not have it (or if
-yours is too old), then runs the setup. Skip to Step 3, get your key, then come back:
+An API key is a long password that lets the script use models on your behalf.
+
+1. Go to <https://openrouter.ai> and sign in (Google/GitHub sign-in works).
+2. Add credit: <https://openrouter.ai/settings/credits>. **$5 is plenty to start.** The two
+   models this sets up are inexpensive, but they are not free — without credit every request
+   fails.
+3. Create a key: <https://openrouter.ai/keys> → **Create Key** → give it any name → **Create**.
+4. **Copy it now.** It looks like `sk-or-v1-` followed by a long string of letters and
+   numbers. OpenRouter shows it exactly once; if you lose it, delete it and make another.
+
+Paste it somewhere safe for the next two minutes. Treat it like a password — anyone who has
+it can spend your credit.
+
+---
+
+## Step 3 — Run one command
+
+This installs everything, Node included. Paste the line for your computer, with the key
+you just copied.
 
 **Windows**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-YOUR-KEY-HERE
+$env:OPENROUTER_API_KEY="sk-or-v1-YOUR-KEY-HERE"; irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1 | iex
 ```
 
 **macOS / Linux**
@@ -66,12 +83,15 @@ yours is too old), then runs the setup. Skip to Step 3, get your key, then come 
 curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-YOUR-KEY-HERE
 ```
 
-If you would rather do it a step at a time, or that command fails, carry on below — the
-manual route is what it automates.
+That is it. The next section shows what it prints.
+
+Worked? Skip to **Step 5**. If it failed, Step 4 is the manual version of the same thing.
 
 ---
 
-## Step 2 — Install Node.js
+## Step 4 — Doing it by hand (only if Step 3 failed)
+
+### Install Node.js
 
 Node.js is the program that runs `setup.js`. Check whether you already have it — paste this
 and press `Enter`:
@@ -80,8 +100,8 @@ and press `Enter`:
 node --version
 ```
 
-- If you see something like `v22.11.0` and the number after `v` is **18 or higher**, skip to
-  Step 3.
+- If you see something like `v22.11.0` and the number after `v` is **18 or higher**, skip
+  ahead to "Then run the setup".
 - If you see `command not found` or `'node' is not recognized`, install it:
 
 **Windows**
@@ -116,24 +136,7 @@ sudo apt update && sudo apt install -y nodejs npm
 
 ---
 
-## Step 3 — Get an OpenRouter API key
-
-An API key is a long password that lets the script use models on your behalf.
-
-1. Go to <https://openrouter.ai> and sign in (Google/GitHub sign-in works).
-2. Add credit: <https://openrouter.ai/settings/credits>. **$5 is plenty to start.** The two
-   models this sets up are inexpensive, but they are not free — without credit every request
-   fails.
-3. Create a key: <https://openrouter.ai/keys> → **Create Key** → give it any name → **Create**.
-4. **Copy it now.** It looks like `sk-or-v1-` followed by a long string of letters and
-   numbers. OpenRouter shows it exactly once; if you lose it, delete it and make another.
-
-Paste it somewhere safe for the next two minutes. Treat it like a password — anyone who has
-it can spend your credit.
-
----
-
-## Step 4 — Run the setup
+### Then run the setup
 
 There is nothing to download. Replace `sk-or-v1-YOUR-KEY-HERE` with the key you copied in
 Step 3, then paste this and press `Enter`:

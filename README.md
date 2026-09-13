@@ -2,20 +2,37 @@
 
 Point Claude Code — the CLI **and** the VSCode extension — at OpenRouter models.
 
+One command. It installs everything it needs, including Node.
+
+**Windows** — PowerShell:
+
+```powershell
+$env:OPENROUTER_API_KEY="sk-or-v1-..."; irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1 | iex
+```
+
+**macOS / Linux** — Terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
+```
+
+That is the whole install on a machine with nothing on it. Get a key first at
+<https://openrouter.ai/keys> and put a few dollars of credit on it.
+
+<details>
+<summary>Already have Node 18+? There is a shorter way.</summary>
+
 ```sh
 npx --allow-git=root github:djerok/claude-openrouter --key sk-or-v1-...
 ```
 
-Node >= 18, no npm dependencies, Windows / macOS / Linux.
+`--allow-git=root` is needed on npm 11+, where git-backed packages are blocked by default
+(`EALLOWGIT`). It allows only the package you named and still blocks git-backed
+dependencies. Older npm ignores the flag with a warning.
 
-**No Node yet?** The line above is itself a Node program, so use a bootstrapper:
+</details>
 
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-...
-```
-```sh
-curl -fsSL https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
-```
+Node >= 18 (installed for you if missing), no npm dependencies, Windows / macOS / Linux.
 
 New to all of this? → **[GETTING-STARTED.md](GETTING-STARTED.md)**, written from a blank machine.
 

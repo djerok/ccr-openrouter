@@ -10,13 +10,11 @@
 
   Run it with:
 
-    irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1 | iex
+    $env:OPENROUTER_API_KEY="sk-or-v1-..."; irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1 | iex
 
-  or, to pass your key in one go (recommended):
+  Or, if you have the file locally, pass switches directly:
 
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/claude-openrouter/main/install.ps1))) -Key sk-or-v1-...
-
-  Anything after -Key is forwarded to setup.js, so -Status, -Off and -On work too.
+    .\install.ps1 -Key sk-or-v1-...  [-Status] [-Off] [-On] [-Doctor] [-Uninstall]
 
 .NOTES
   Installer exit codes are not trusted anywhere in this script. winget in
@@ -34,6 +32,11 @@ param(
   [switch]$Doctor,
   [switch]$NoVerify
 )
+
+# Piping through iex means no arguments can be passed, so the key comes from the
+# environment in that case. Belt and braces: the param default covers the normal
+# invocation, this covers everything else.
+if (-not $Key -and $env:OPENROUTER_API_KEY) { $Key = $env:OPENROUTER_API_KEY }
 
 $ErrorActionPreference = 'Stop'
 $MinNode = 18
