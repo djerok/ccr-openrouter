@@ -24,6 +24,8 @@
  *   node setup.js --on                 # back to OpenRouter
  *   node setup.js --uninstall          # restore the newest backup
  *   node setup.js --no-verify          # skip the live test request
+ *   node setup.js --efficient          # token-saving setup: reply compression + plain
+ *                                      # language rules (same as --extras)
  *   node setup.js --extras             # also install caveman + a plain-language CLAUDE.md
  *                                      # (off by default: they change how the model is
  *                                      #  instructed, and a small model can go silent)
@@ -1489,7 +1491,10 @@ async function install() {
   say('Pointing Claude Code at OpenRouter (covers the CLI and the VSCode extension)');
   // Opt-in, not opt-out. These change how the model is instructed, and a
   // machine that answers nothing is worse than one that answers verbosely.
-  const extras = hasFlag('--extras');
+  // --efficient is the token-saving variant: reply compression plus the
+  // plain-language rules, which together cut output tokens noticeably. It is a
+  // separate choice from routing because it changes how the model is instructed.
+  const extras = hasFlag('--extras') || hasFlag('--efficient');
   // The smaller of the two windows: one setting covers both models, and
   // over-stating it would let a session grow past what the other can accept.
   const contextTokens = Math.min(
@@ -1508,6 +1513,12 @@ async function install() {
   info(`context window ${contextTokens.toLocaleString()} tokens`);
 
   reportMcp();
+  if (hasFlag('--efficient')) {
+    const servers = mcpServers();
+    if (servers.length) {
+      info(`biggest remaining saving: node setup.js --trim <servers to keep>`);
+    }
+  }
 
   if (extras) {
     say('Writing plain-language instructions');

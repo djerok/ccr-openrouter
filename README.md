@@ -98,6 +98,23 @@ only needed for Anthropic and Qwen models, which this never routes to.
 7. Sends one real request and shows you the reply. A config that writes but does not work
    is a failed install, and you should learn that now.
 
+## Token-saving setup (optional)
+
+```sh
+npx --allow-git=root github:djerok/claude-openrouter --key sk-or-v1-... --efficient
+```
+
+That installs the reply-compression hook and the plain-language rules, which cut output
+tokens without touching code, commands or error strings. It also points you at `--trim`,
+which is the larger saving if you have MCP servers enabled.
+
+Worth understanding what actually costs you money first. A short session can bill millions
+of input tokens while the display shows a few thousand, and that is not a bug: the display
+is the *current context*, while billing counts every turn resending the whole conversation
+plus the system prompt plus every tool schema. Twenty turns over a 40k context bills roughly
+800k input by itself. `--usage` shows how much of that the provider's cache absorbed and how
+much fixed overhead each turn carries.
+
 ## Prompt extras — off by default
 
 Two optional pieces change *how the model is instructed*: a bundled prompt-compression hook
