@@ -163,11 +163,26 @@ function globalBin(cmd) {
  *
  * Returns { state: 'ok'|'broken'|'missing', version, path, stderr }.
  */
+/**
+ * Some programs validate their configuration before doing anything at all —
+ * CCR refuses even `--version` with "No available models" until a provider
+ * exists. That is a working install with nothing configured yet, not a broken
+ * one, and treating it as broken sends the user chasing a compiler.
+ */
+function isConfigComplaint(stderr) {
+  return /no available models|configure at least one|config(uration)? (file )?(not found|missing|invalid)/i.test(
+    stderr
+  );
+}
+
 function probeCommand(cmd) {
   for (const args of [['--version'], ['-v']]) {
     const res = run(cmd, args);
     if (res.code === 0 && res.stdout) {
       return { state: 'ok', version: res.stdout.split('\n')[0], path: cmd, stderr: '' };
+    }
+    if (res.stderr && isConfigComplaint(res.stderr)) {
+      return { state: 'ok', version: 'installed, unconfigured', path: cmd, stderr: '' };
     }
     // A non-zero exit with real stderr means it ran and failed — not missing.
     if (res.stderr && !/not recognized|not found|ENOENT/i.test(res.stderr)) {
@@ -183,6 +198,9 @@ function probeCommand(cmd) {
     const res = run(abs, args);
     if (res.code === 0 && res.stdout) {
       return { state: 'ok', version: res.stdout.split('\n')[0], path: abs, stderr: '' };
+    }
+    if (res.stderr && isConfigComplaint(res.stderr)) {
+      return { state: 'ok', version: 'installed, unconfigured', path: abs, stderr: '' };
     }
     if (res.stderr) {
       return { state: 'broken', version: null, path: abs, stderr: res.stderr };
@@ -257,9 +275,11 @@ const PERMS_HINT = IS_WIN
  */
 function npmInstallGlobal(pkg, nativeDeps = []) {
   const args = ['install', '-g'];
-  if (nativeDeps.length && npmMajor() >= 12) {
-    args.push(`--allow-scripts=${nativeDeps.join(',')}`);
-  }
+  // Always pass it when there is something to allow. npm 11 already blocks
+  // install scripts, npm 12 kept the behaviour, and older versions treat the
+  // flag as unknown config — a warning, not a failure. Version-gating this was
+  // a bug: it silently did nothing on npm 11.
+  if (nativeDeps.length) args.push(`--allow-scripts=${nativeDeps.join(',')}`);
   args.push(pkg);
   return run('npm', args, { stdio: 'inherit' });
 }
@@ -995,9 +1015,6 @@ async function install() {
   checkNode();
   checkNpm();
   ensureNpmPackage('claude', '@anthropic-ai/claude-code', 'Claude Code');
-  ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router', [
-    'better-sqlite3',
-  ]);
 
   const key = resolveKey();
 
@@ -1010,10 +1027,19 @@ async function install() {
     ok(`${role} → ${m.id}  ${C.dim}${(m.context_length || 0).toLocaleString()} ctx${C.reset}${note}`);
   }
 
+  // The config is written before the router is installed, not after. CCR
+  // refuses to start — including for `--version` — until at least one provider
+  // with a model exists, so probing it on a machine with no config reports a
+  // healthy install as broken.
   say('Writing the router config');
   const { token } = writeCcrConfig(key, fast, smart);
   ok(`${CCR_CONFIG}`);
   info(`local router token: ${token.slice(0, 12)}… (Claude Code authenticates to CCR with this, not with your OpenRouter key)`);
+
+  say('Installing the router');
+  ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router', [
+    'better-sqlite3',
+  ]);
 
   say('Writing the statusline');
   writeStatusline();
