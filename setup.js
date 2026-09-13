@@ -24,8 +24,8 @@
  *   node setup.js --on                 # back to OpenRouter
  *   node setup.js --uninstall          # restore the newest backup
  *   node setup.js --no-verify          # skip the live test request
- *   node setup.js --cheap              # use the cheaper model as the default, accepting
- *                                      # that it sometimes answers with nothing
+ *   node setup.js --reliable           # make the pricier model the default (use if a turn
+ *                                      # ever runs tools and prints nothing)
  *   node setup.js --efficient          # token-saving setup: reply compression + plain
  *                                      # language rules (same as --extras)
  *   node setup.js --extras             # also install caveman + a plain-language CLAUDE.md
@@ -1482,18 +1482,20 @@ async function install() {
   // the labels.
   const [cheap, dear] = [first, second].sort((x, y) => blendedPrice(x) - blendedPrice(y));
 
-  // ...but price does not decide which one answers by default. Measured on a
-  // clean machine: DeepSeek V4 Flash ends a tool-using turn with no text block
-  // at all on roughly half of attempts — the tools run and nothing is printed.
-  // GLM 5.3 Flash answered every time. A model that costs a quarter as much and
-  // silently drops answers is not the cheaper option, so the reliable one is the
-  // default and --cheap opts into the other.
-  const main = hasFlag('--cheap') ? cheap : dear;
-  const secondary = hasFlag('--cheap') ? dear : cheap;
+  // The cheaper model is the default, as intended: everyday work on DeepSeek,
+  // the pricier GLM one /model opus away.
+  //
+  // Known trade-off, measured on a clean machine: DeepSeek V4 Flash sometimes
+  // ends a tool-using turn with no text block — the tools run and nothing is
+  // printed. GLM did not do this in the same tests. --reliable makes GLM the
+  // default if that ever becomes annoying; MAX_THINKING_TOKENS=0 below reduces
+  // how often it happens.
+  const main = hasFlag('--reliable') ? dear : cheap;
+  const secondary = hasFlag('--reliable') ? cheap : dear;
   ok(`default -> ${main.id}  ${C.dim}${priceLabel(main)}${C.reset}`);
   ok(`other   -> ${secondary.id}  ${C.dim}${priceLabel(secondary)}${C.reset}`);
-  if (!hasFlag('--cheap')) {
-    info(`${cheap.id} is cheaper but drops answers on tool-using turns — --cheap to use it anyway`);
+  if (!hasFlag('--reliable')) {
+    info('if a turn ever runs tools and prints nothing, re-run with --reliable');
   }
   for (const m of [first, second]) {
     if (m.matchedBy === 'fuzzy') warn(`${m.id} was a fuzzy match — the exact slug is gone`);

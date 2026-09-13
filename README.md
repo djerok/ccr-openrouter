@@ -66,31 +66,28 @@ miss the extension.
 
 ## Models
 
-| slot | model | why |
+| slot | model | when |
 |---|---|---|
-| default, background | `z-ai/glm-5.3-flash` | answers reliably, including on tool-using turns |
-| `/model opus` | `deepseek/deepseek-v4-flash-0731` | 3.75x cheaper, but see below |
+| default, background | `deepseek/deepseek-v4-flash-0731` | everything — the cheap one |
+| `/model opus` | `z-ai/glm-5.3-flash` | when you want more |
 
-**The cheaper model is not the default, on purpose.** Measured on a clean machine:
-`deepseek/deepseek-v4-flash-0731` ends a tool-using turn with **no text block at all** on
-roughly half of attempts — the tools run, the turn ends, nothing is printed. GLM answered
-every time. A model that costs a quarter as much and silently drops answers is not the
-cheaper option.
+$0.04/M in against $0.15/M in, so the default is 3.75x cheaper. Which of the two counts as
+cheap is read from live prices at install time, so a reprice cannot invert the labels.
 
-If you want it anyway:
+**One known rough edge.** DeepSeek sometimes ends a tool-using turn with no text block — the
+tools run, the turn ends, nothing is printed. GLM did not do this in the same tests. If it
+bothers you:
 
 ```sh
-node setup.js --key sk-or-v1-... --cheap
+node setup.js --key sk-or-v1-... --reliable   # GLM becomes the default instead
 ```
 
-Extended thinking is disabled (`MAX_THINKING_TOKENS=0`) for the same family of reasons:
-OpenRouter returns thinking blocks with an empty signature, and once one is echoed back in
-the history the model stops emitting text. It is also a large saving — in a measured request
-57 of 63 output tokens were thinking.
+Extended thinking is disabled (`MAX_THINKING_TOKENS=0`), which makes the empty-answer case
+markedly rarer: OpenRouter returns thinking blocks with an empty signature, and once one is
+echoed back in the history the model stops emitting text. It is also a large saving — in a
+measured request 57 of 63 output tokens were thinking.
 
-Which of the two is "cheap" is still read from live prices at install time, so a reprice
-cannot invert the labels. Edit the `WANTED` table at the top of `setup.js` for different
-models.
+Edit the `WANTED` table at the top of `setup.js` for different models.
 
 ### Caching
 
