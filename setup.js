@@ -639,7 +639,7 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * can cost you the answer are not a sensible default, so unless they are asked
  * for explicitly the installer takes them back off.
  */
-function removePromptExtras(settings) {
+function removePromptExtras(settings, cavemanSrc) {
   const removed = [];
 
   // Unregister the caveman hooks, leaving every other hook untouched.
@@ -659,7 +659,7 @@ function removePromptExtras(settings) {
   // a file we did not write is not ours to do — so a file is removed only when
   // it is byte-identical to the bundled copy. Anything else is left on disk and
   // reported; unregistered, it is inert either way.
-  const bundled = path.join(__dirname, 'extras', 'caveman');
+  const bundled = cavemanSrc || path.join(__dirname, 'extras', 'caveman');
   const kept = [];
   for (const f of CAVEMAN_FILES) {
     const installed = path.join(HOOKS_DIR, f);
@@ -1318,8 +1318,51 @@ const CAVEMAN_FILES = [
 
 const HOOKS_DIR = path.join(CLAUDE_DIR, 'hooks');
 
-function installCaveman(settings) {
-  const src = path.join(__dirname, 'extras', 'caveman');
+/**
+ * Fetch the bundled extras when this copy does not have them.
+ *
+ * The bootstrappers download setup.js on its own, and so does the auto-updater,
+ * so `extras/` is present only when running from a clone or through npx. Asking
+ * for --extras on the headline install path therefore did nothing but print a
+ * skip notice. Rather than make the flag a lie on the most common path, the
+ * files are fetched from the same commit the rest of the install came from.
+ */
+async function ensureCavemanFiles() {
+  const local = path.join(__dirname, 'extras', 'caveman');
+  if (fs.existsSync(local)) return local;
+
+  const dest = path.join(os.tmpdir(), 'claude-openrouter-extras-' + Date.now());
+  try {
+    fs.mkdirSync(dest, { recursive: true });
+  } catch {
+    return null;
+  }
+
+  let got = 0;
+  for (const f of CAVEMAN_FILES) {
+    try {
+      const res = await fetch(`${RAW_BASE}/extras/caveman/${f}`, {
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      // A proxy error page would otherwise be installed as a hook.
+      if (!text.trim() || /^\s*<(!doctype|html)/i.test(text)) continue;
+      fs.writeFileSync(path.join(dest, f), text);
+      got++;
+    } catch {}
+  }
+
+  if (!got) {
+    warn('could not download the caveman files — continuing without them');
+    return null;
+  }
+  info(`downloaded ${got} caveman files (not bundled with this copy)`);
+  return dest;
+}
+
+function installCaveman(settings, srcDir) {
+  const src = srcDir || path.join(__dirname, 'extras', 'caveman');
   if (!fs.existsSync(src)) {
     info('caveman not bundled with this copy — skipping');
     return false;
@@ -1663,8 +1706,9 @@ async function install() {
     dear.context_length || 200000
   );
   const sha = await currentSha();
+  const cavemanSrc = extras ? await ensureCavemanFiles() : null;
   writeClaudeSettings(key, cheap.id, dear.id, contextTokens, (settings) => {
-    if (extras) installCaveman(settings);
+    if (extras) installCaveman(settings, cavemanSrc);
     else removePromptExtras(settings);
     // Opt-in. It is only accounting, and it has already cost two user-visible
     // problems — a broken pipe that ate replies, and hook timeouts. Nothing
