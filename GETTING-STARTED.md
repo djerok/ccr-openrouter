@@ -48,6 +48,28 @@ To paste into a terminal: **Windows** right-click, or `Ctrl`+`V`. **macOS** `Cmd
 
 ---
 
+## Shortcut — let it install Node for you
+
+Steps 2 and 4 can be done in one command. It installs Node if you do not have it (or if
+yours is too old), then runs the setup. Skip to Step 3, get your key, then come back:
+
+**Windows**
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-YOUR-KEY-HERE
+```
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-YOUR-KEY-HERE
+```
+
+If you would rather do it a step at a time, or that command fails, carry on below — the
+manual route is what it automates.
+
+---
+
 ## Step 2 — Install Node.js
 
 Node.js is the program that runs `setup.js`. Check whether you already have it — paste this
@@ -234,6 +256,17 @@ To change model in the middle of a conversation, type this into Claude Code:
 | Claude Code says it cannot connect | The router is not running | Run `ccr start`. It should start automatically from now on — the setup added it to your system startup |
 | The statusline is blank or garbled | Your terminal cannot draw the symbols | Harmless. Windows users: use **Windows Terminal** rather than the old console window |
 | The header says "Sonnet" | Expected | Hardcoded in Claude Code. The bottom statusline is the real one |
+
+### Ask the setup what is wrong
+
+```sh
+npx --allow-git=root github:djerok/ccr-openrouter --doctor
+```
+
+It changes nothing. It prints your Node and npm versions, whether Claude Code and the
+router are installed and actually runnable, which config files exist, whether the router is
+listening, and whether OpenRouter is reachable from your network. **It prints no keys**, so
+it is safe to paste into an issue.
 
 Still stuck? Open an issue at
 <https://github.com/djerok/ccr-openrouter/issues> and paste the full output — but **delete

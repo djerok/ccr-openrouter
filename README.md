@@ -21,9 +21,25 @@ edits your config — clone the repo and run `node setup.js --key ...` instead. 
 
 No npm dependencies. Node >= 18. Windows, macOS, Linux.
 
+**No Node on the machine?** The command above cannot help you — it *is* a Node program.
+Use the bootstrapper instead, which installs Node first and then runs the setup:
+
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.ps1))) -Key sk-or-v1-...
+```
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/djerok/ccr-openrouter/main/install.sh | sh -s -- --key sk-or-v1-...
+```
+
 **New to this?** → **[GETTING-STARTED.md](GETTING-STARTED.md)** walks through it from a
 machine with nothing installed: opening a terminal, installing Node, getting an OpenRouter
 key, and what to do when a step fails. Windows, macOS and Linux side by side.
+
+**Something broken?** `--doctor` reports the state of everything involved and changes
+nothing. It prints no keys, so it is safe to paste into an issue.
 
 ## Why
 
@@ -88,6 +104,7 @@ npx --allow-git=root github:djerok/ccr-openrouter --on                 # re-enab
 npx --allow-git=root github:djerok/ccr-openrouter --uninstall          # restore backups, remove statusline + autostart
 npx --allow-git=root github:djerok/ccr-openrouter --no-autostart       # skip the OS startup entry
 npx --allow-git=root github:djerok/ccr-openrouter --no-verify          # skip the live round-trip test
+npx --allow-git=root github:djerok/ccr-openrouter --doctor             # diagnose the environment, change nothing
 ```
 
 From a clone, swap `npx --allow-git=root github:djerok/ccr-openrouter` for `node setup.js` in any of the above.
@@ -100,6 +117,27 @@ There is no baked-in default, on purpose.
 - **CLI** — open a *new* terminal, run `claude`.
 - **VSCode** — reload the window (`Ctrl+Shift+P` → Developer: Reload Window).
 - Switch model mid-session: `/model openrouter,z-ai/glm-5.3-flash`
+
+## When the machine fights back
+
+The setup is written on the assumption that the environment is broken, because on a fresh
+machine it usually is.
+
+| Situation | What happens |
+|---|---|
+| No Node at all | The `npx` line cannot run. Use a bootstrapper above — it installs Node, then runs the setup |
+| Node older than 18 | Refused up front with the version it found. The bootstrappers upgrade it |
+| Node installed but the terminal cannot see it | The PowerShell bootstrapper rebuilds `PATH` in-process, so no reopening is needed |
+| `npm` missing although Node is present | Caught before anything is installed, with the per-platform fix |
+| Package installs but the binary crashes | Distinguished from "not installed", repaired once automatically, and if it still fails the program's own stderr is quoted |
+| Global bin not on `PATH` | The binary is located through `npm prefix -g` and invoked by absolute path instead |
+| npm 12 blocking native build scripts | Installs pass `--allow-scripts` for the packages that need it |
+| A proxy returning an HTML error page instead of a file | Downloads are checked by size and content, not by exit code |
+| Model renamed or retired on OpenRouter | Caught at install time against the live catalogue, not on your first prompt |
+| No credit on the OpenRouter account | The key check reports the 401 plainly rather than failing later inside Claude Code |
+
+Installer exit codes are trusted nowhere. `winget` in particular reports success while
+installing nothing, so every step is verified by running the program and reading its output.
 
 ## Notes
 

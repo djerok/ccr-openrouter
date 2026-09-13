@@ -24,6 +24,7 @@
  *   node setup.js --off                # temporarily go back to Anthropic
  *   node setup.js --on                 # re-enable OpenRouter routing
  *   node setup.js --status             # show current routing state
+ *   node setup.js --doctor             # diagnose a broken environment, change nothing
  *   node setup.js --uninstall          # restore the newest backups
  *
  * Requires Node >= 18 (uses global fetch). No npm dependencies.
@@ -218,6 +219,30 @@ function checkNode() {
   ok(`node ${process.versions.node}`);
 }
 
+/**
+ * npm ships with Node, so a missing npm means a partial or unusual install —
+ * worth catching here rather than as a confusing failure three steps later.
+ */
+function checkNpm() {
+  const v = run('npm', ['--version']).stdout;
+  if (!v) {
+    die(
+      'npm is not available, even though Node is.',
+      IS_WIN
+        ? 'Reinstall Node from https://nodejs.org and leave "npm package manager" checked.'
+        : 'On Debian/Ubuntu the nodejs package sometimes omits it:\n  sudo apt-get install -y npm\nOtherwise reinstall Node from https://nodejs.org.'
+    );
+  }
+  ok(`npm ${v}`);
+
+  // A corrupted cache produces install failures that look like network errors.
+  const prefix = run('npm', ['prefix', '-g']).stdout;
+  if (!prefix) {
+    warn('npm could not report its global prefix — your npm config may be damaged');
+    info('If installs fail below, try:  npm cache clean --force');
+  }
+}
+
 /** Resolved absolute paths, so later calls never depend on PATH. */
 const BIN = {};
 
@@ -255,12 +280,16 @@ function ensureNpmPackage(binary, pkg, label, nativeDeps = []) {
     probe = probeCommand(binary);
   }
 
-  // Installed, reachable, but exiting non-zero. On npm >= 12 the overwhelmingly
-  // likely cause is a native dependency whose build script was skipped, so try
-  // exactly that repair once before giving up.
-  if (probe.state === 'broken' && nativeDeps.length) {
-    warn(`${label} is installed but fails to start — retrying with its build scripts enabled`);
-    info(`(npm ${npmMajor()} blocks install scripts by default: ${nativeDeps.join(', ')})`);
+  // Installed, reachable, but exiting non-zero — a half-finished or corrupted
+  // install. Attempt one repair before giving up, since the alternative is
+  // telling the user to debug someone else's package.
+  if (probe.state === 'broken') {
+    if (nativeDeps.length) {
+      warn(`${label} is installed but fails to start — reinstalling with its build scripts enabled`);
+      info(`(npm ${npmMajor()} blocks install scripts by default: ${nativeDeps.join(', ')})`);
+    } else {
+      warn(`${label} is installed but fails to start — reinstalling it once`);
+    }
     const res = npmInstallGlobal(pkg, nativeDeps);
     if (res.code === 0) probe = probeCommand(binary);
   }
@@ -856,6 +885,73 @@ function modeStatus() {
   console.log(`${C.bold}ccr:${C.reset}        ${probe.code === 0 ? probe.stdout.split('\n')[0] : C.red + 'not running' + C.reset}`);
 }
 
+/**
+ * Report the state of everything this script depends on, changing nothing.
+ * Intended for pasting into a bug report when an install fails.
+ */
+async function modeDoctor() {
+  const line = (k, v, good) =>
+    console.log(
+      `${C.bold}${(k + ':').padEnd(16)}${C.reset}` +
+        `${good === undefined ? '' : good ? C.green : C.red}${v}${C.reset}`
+    );
+
+  console.log(`${C.bold}ccr-openrouter doctor${C.reset}\n`);
+
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  line('platform', `${process.platform} ${process.arch}`);
+  line('node', process.versions.node, nodeMajor >= 18);
+  line('node path', process.execPath);
+
+  const npmV = run('npm', ['--version']).stdout;
+  line('npm', npmV || 'MISSING', Boolean(npmV));
+  if (npmV) {
+    line('npm prefix', run('npm', ['prefix', '-g']).stdout || 'unknown');
+    line('allow-git', run('npm', ['config', 'get', 'allow-git']).stdout || 'unset');
+    line('allow-scripts', run('npm', ['config', 'get', 'allow-scripts']).stdout || 'unset');
+  }
+
+  for (const [bin, label] of [['claude', 'Claude Code'], ['ccr', 'Claude Code Router']]) {
+    const p = probeCommand(bin);
+    line(
+      label.toLowerCase().replace(/\s+/g, '-'),
+      p.state === 'ok' ? `${p.version}  (${p.path})` : `${p.state.toUpperCase()}${p.stderr ? ' — ' + p.stderr.split('\n')[0] : ''}`,
+      p.state === 'ok'
+    );
+  }
+
+  for (const [label, file] of [
+    ['ccr config', CCR_CONFIG],
+    ['claude settings', CLAUDE_SETTINGS],
+    ['statusline', STATUSLINE],
+  ]) {
+    line(label, fs.existsSync(file) ? file : 'not present', fs.existsSync(file));
+  }
+
+  let routerUp = false;
+  try {
+    const res = await fetch(BASE_URL, { signal: AbortSignal.timeout(2000) });
+    routerUp = res.status < 500;
+  } catch {}
+  line('router', routerUp ? `listening on ${BASE_URL}` : `nothing on ${BASE_URL}`, routerUp);
+
+  let net = false;
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+      signal: AbortSignal.timeout(15000),
+    });
+    net = res.ok;
+  } catch {}
+  line('openrouter', net ? 'reachable' : 'UNREACHABLE', net);
+  for (const v of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']) {
+    if (process.env[v]) line(v.toLowerCase(), process.env[v]);
+  }
+
+  console.log(
+    `\n${C.dim}Paste this into an issue if something is wrong. It contains no keys.${C.reset}`
+  );
+}
+
 function modeUninstall() {
   let restored = 0;
   for (const file of [CLAUDE_SETTINGS, CCR_CONFIG]) {
@@ -897,6 +993,7 @@ async function install() {
 
   say('Checking prerequisites');
   checkNode();
+  checkNpm();
   ensureNpmPackage('claude', '@anthropic-ai/claude-code', 'Claude Code');
   ensureNpmPackage('ccr', '@musistudio/claude-code-router', 'Claude Code Router', [
     'better-sqlite3',
@@ -968,6 +1065,7 @@ async function install() {
     console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*|^ \* ?/gm, ''));
     return;
   }
+  if (hasFlag('--doctor')) return modeDoctor();
   if (hasFlag('--status')) return modeStatus();
   if (hasFlag('--off')) return modeOff();
   if (hasFlag('--on')) return modeOn();
