@@ -149,6 +149,26 @@ break the session you are starting. Every path swallows its own errors by design
 result lands on your next session, and a log of what happened is at
 `~/.claude/openrouter-autoupdate.log`. Pass `--no-autoupdate` to skip it.
 
+## Usage logging
+
+Every assistant turn appends one line to `~/.claude/openrouter-usage.jsonl`. This is a
+plain Stop hook — a small Node function reading the hook payload and writing a file. **No
+model is involved and it costs nothing**; it is accounting, not analysis.
+
+```sh
+node setup.js --usage
+```
+
+shows live spend straight from OpenRouter (total, today, this week, this month, credit
+remaining — the authoritative numbers) and the local totals per turn and per model.
+
+The hook does not hard-code field names. It walks the payload and keeps anything that looks
+like a token count, a cost or a duration, so it keeps working if the payload shape changes
+and an unfamiliar field shows up in the log rather than being silently dropped.
+
+`--no-usagelog` skips it. `--uninstall` removes the hook but **keeps the log** — it is your
+data.
+
 ## Modes
 
 ```sh
@@ -162,6 +182,8 @@ npx --allow-git=root github:djerok/claude-openrouter --no-verify         # skip 
 npx --allow-git=root github:djerok/claude-openrouter --no-extras         # skip CLAUDE.md, caveman, rtk
 npx --allow-git=root github:djerok/claude-openrouter --no-launch         # do not start Claude Code at the end
 npx --allow-git=root github:djerok/claude-openrouter --no-autoupdate     # do not self-update on session start
+npx --allow-git=root github:djerok/claude-openrouter --usage             # token and spend totals
+npx --allow-git=root github:djerok/claude-openrouter --no-usagelog       # do not log per-turn usage
 ```
 
 From a clone, use `node setup.js` in place of the `npx` part.
