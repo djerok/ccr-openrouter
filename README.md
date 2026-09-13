@@ -358,14 +358,49 @@ No key is baked into the script.
 ## Statusline
 
 ```
-● deepseek-v4-flash-0731 (cheap) | ⚙ high | my-project | main | $0.0031
+* glm-5.3-flash (dear) | ctx 12% | cache 91% | high | my-project | main | $0.0312 | v59f677b
 ```
 
-Green dot means routed to OpenRouter, yellow means you are on your Anthropic account.
-`cheap` / `dear` tells you which slot answered.
+Every field comes from one Claude Code documents for status lines, not from
+anything invented here:
 
-Claude Code's **top header may still say a Claude model name** — that part of the UI is not
-driven by these variables. The bottom statusline is the one to trust.
+| field | source | why it matters |
+|---|---|---|
+| model + tier | your settings | which of the two models answered |
+| `ctx NN%` | `context_window.used_percentage` | what drives compaction; red past 90% |
+| `cache NN%` | `prompt_cache.hit_ratio` | whether resending the conversation each turn is cheap. Red under 40%, and `cold` when the cached prefix has expired |
+| effort | `effort.level` | live value, including mid-session `/effort` changes |
+| cost | `cost.total_cost_usd` | session spend |
+| `vNNNNNNN` | this project's installed commit | turns yellow with `up!` when a newer version is waiting |
+
+Cache hit rate is the number to watch. Claude Code resends the whole
+conversation every turn; whether that is billed at full price or at the cached
+rate is the difference between a cheap session and an expensive one.
+
+## Reducing tokens, by the official guidance
+
+Anthropic documents what actually works in
+[Manage costs effectively](https://code.claude.com/docs/en/costs). The useful
+parts, and what this installer does about each:
+
+| lever | status |
+|---|---|
+| `MAX_THINKING_TOKENS` to cut thinking spend | **set to 0 by the installer.** Thinking tokens bill as output, and the default budget can be tens of thousands per request |
+| Watch context usage in the status line | **installed** — the `ctx` field above |
+| `/clear` between unrelated tasks | yours to run. Stale context is billed on every later message |
+| `/compact Focus on ...` with custom instructions | yours to run |
+| `# Compact instructions` in CLAUDE.md | added by `--efficient` |
+| `/context` to see what is consuming space | yours to run |
+| Disable unused MCP servers with `/mcp` | `--trim` does it non-interactively |
+| Prefer CLI tools (`gh`, `aws`) over MCP servers | yours to choose |
+| Keep CLAUDE.md under 200 lines; move detail into skills | the block added by `--efficient` is short by design |
+| Delegate verbose work to subagents | yours to choose |
+
+**A correction to earlier advice in this file.** MCP tool definitions are
+*deferred by default* — only tool names and server instructions enter context
+until a tool is actually used. Disabling unused servers still helps, but far
+less than claimed here previously. Run `/context` to see the real numbers before
+trimming anything.
 
 ## When the machine fights back
 
