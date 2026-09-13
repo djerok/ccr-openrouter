@@ -696,6 +696,36 @@ async function modeUsage() {
     else pretty = Math.round(v).toLocaleString();
     line('  ' + k, pretty);
   }
+  // The question this answers: am I paying full price for the system prompt and
+  // tool schemas on every turn, or is the provider's cache absorbing them?
+  const inTok = totals['usage.input_tokens'] || 0;
+  const cached =
+    (totals['usage.cache_read_input_tokens'] || 0) + (totals['usage.cache_read_tokens'] || 0);
+  if (inTok) {
+    const pct = (cached / inTok) * 100;
+    console.log(`\n${C.cyan}Cache${C.reset}`);
+    line('  input tokens', Math.round(inTok).toLocaleString());
+    line('  from cache', `${Math.round(cached).toLocaleString()} (${pct.toFixed(1)}%)`);
+
+    if (cached === 0) {
+      console.log(`  ${C.yellow}No cache hits recorded.${C.reset} ${C.dim}Every turn is paying full price for the`);
+      console.log(`  system prompt and tool schemas. Normal for the first turns of a session;`);
+      console.log(`  if it stays at zero over many turns, something is changing the start of`);
+      console.log(`  the prompt each time.${C.reset}`);
+    } else if (pct < 50) {
+      console.log(`  ${C.dim}Below half. One long session caches better than many short ones.${C.reset}`);
+    }
+
+    const perTurn = inTok / rows.length;
+    line('  input per turn', Math.round(perTurn).toLocaleString());
+    if (perTurn > 20000) {
+      console.log(`  ${C.yellow}That is a lot of fixed overhead per turn.${C.reset}`);
+      console.log(`  ${C.dim}Every enabled MCP server adds its tool schemas to every single request,`);
+      console.log(`  whatever you are asking. Turning off the ones this project does not need is`);
+      console.log(`  the single biggest saving available.${C.reset}`);
+    }
+  }
+
   console.log(`\n${C.cyan}Turns per model${C.reset}`);
   for (const [m, n] of Object.entries(byModel).sort((a, b) => b[1] - a[1])) {
     line('  ' + m, n);
