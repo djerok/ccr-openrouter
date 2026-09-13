@@ -57,55 +57,122 @@ fetch() {
   fi
 }
 
-install_node_nvm() {
-  # nvm is the most reliable route on Linux: no sudo, and the distro packages
-  # are frequently years behind the minimum this needs.
-  note 'installing Node via nvm (no sudo required)'
-  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-  if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-    fetch 'https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh' /tmp/nvm-install.sh \
-      || fail 'Could not download the nvm installer.' 'Check your network, or install Node manually from https://nodejs.org'
-    # shellcheck disable=SC1091
-    PROFILE=/dev/null sh /tmp/nvm-install.sh >/dev/null 2>&1 || true
-    rm -f /tmp/nvm-install.sh
+# Node is installed from the official tarball rather than through nvm.
+# nvm must be sourced into a shell it supports and wants to read from stdin,
+# and this script is itself running under `sh` with stdin attached to a curl
+# pipe — which is exactly why the nvm route failed on a clean Mac. A tarball
+# needs no shell integration, no sudo and no stdin.
+NODE_PREFIX="$HOME/.local/node"
+NODE_MARK_BEGIN="# >>> claude-openrouter: node on PATH >>>"
+NODE_MARK_END="# <<< claude-openrouter <<<"
+
+node_platform() {
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux)  os=linux ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) arch=arm64 ;;
+    x86_64|amd64)  arch=x64 ;;
+    armv7l)        arch=armv7l ;;
+    *) return 1 ;;
+  esac
+  echo "${os}-${arch}"
+}
+
+# index.tab is the machine-readable version of the release index: columns are
+# version, date, ..., lts. The first row whose lts column is not "-" is the
+# current LTS. Parsing this avoids needing jq, python or node itself.
+latest_lts() {
+  tab=$(mktemp /tmp/node-index.XXXXXX)
+  fetch 'https://nodejs.org/dist/index.tab' "$tab" || { rm -f "$tab"; return 1; }
+  v=$(awk 'NR>1 && $10 != "-" { print $1; exit }' "$tab")
+  rm -f "$tab"
+  [ -n "$v" ] || return 1
+  echo "$v"
+}
+
+persist_node_path() {
+  bin="$1"
+  case "$SHELL" in
+    *zsh) rc="$HOME/.zshrc" ;;
+    *bash) rc="$HOME/.bashrc" ;;
+    *) [ "$(uname -s)" = "Darwin" ] && rc="$HOME/.zshrc" || rc="$HOME/.profile" ;;
+  esac
+  [ -f "$rc" ] || : > "$rc"
+  if ! grep -q "claude-openrouter: node on PATH" "$rc" 2>/dev/null; then
+    {
+      printf '
+%s
+' "$NODE_MARK_BEGIN"
+      printf 'export PATH="%s:$PATH"
+' "$bin"
+      printf '%s
+' "$NODE_MARK_END"
+    } >> "$rc"
+    note "added Node to your PATH in $rc"
   fi
-  [ -s "$NVM_DIR/nvm.sh" ] || return 1
-  # shellcheck disable=SC1091
-  . "$NVM_DIR/nvm.sh"
-  nvm install --lts >/dev/null 2>&1 || return 1
-  nvm use --lts >/dev/null 2>&1 || return 1
+}
+
+install_node_tarball() {
+  plat=$(node_platform) || {
+    warn "unsupported platform $(uname -s)/$(uname -m) for the official tarball"
+    return 1
+  }
+  ver=$(latest_lts) || { warn 'could not read the Node release index'; return 1; }
+  note "installing Node $ver ($plat) into $NODE_PREFIX"
+
+  url="https://nodejs.org/dist/$ver/node-$ver-$plat.tar.gz"
+  tgz=$(mktemp /tmp/node.XXXXXX.tar.gz)
+  fetch "$url" "$tgz" || { rm -f "$tgz"; warn "download failed: $url"; return 1; }
+
+  # Verify by bytes. A proxy or captive portal serving an HTML error page is
+  # otherwise indistinguishable from a successful download.
+  size=$(wc -c < "$tgz" | tr -d ' ')
+  if [ "$size" -lt 5000000 ]; then
+    rm -f "$tgz"
+    warn "the download was only $size bytes — truncated or intercepted"
+    return 1
+  fi
+
+  mkdir -p "$NODE_PREFIX"
+  tar -xzf "$tgz" -C "$NODE_PREFIX" --strip-components=1 || {
+    rm -f "$tgz"; warn 'could not unpack the Node tarball'; return 1
+  }
+  rm -f "$tgz"
+
+  [ -x "$NODE_PREFIX/bin/node" ] || { warn 'unpacked, but no node binary found'; return 1; }
+  PATH="$NODE_PREFIX/bin:$PATH"
+  export PATH
+  persist_node_path "$NODE_PREFIX/bin"
   return 0
 }
 
 install_node() {
   step 'Installing Node.js'
-  os=$(uname -s)
 
-  if [ "$os" = "Darwin" ]; then
-    if has brew; then
-      note 'installing Node via Homebrew'
-      brew install node >/dev/null 2>&1 || warn 'brew install node reported a problem'
-      [ "$(node_major)" -ge "$MIN_NODE" ] && return 0
-    fi
-    install_node_nvm && return 0
-    fail 'Could not install Node automatically on macOS.' \
-      'Install Homebrew from https://brew.sh and run `brew install node`, or download the macOS installer from https://nodejs.org — then re-run this script.'
-  fi
-
-  # Linux. Try nvm first; it needs no root and gives a current version.
-  if install_node_nvm; then
+  # Homebrew first when it is already there: it is quick and keeps Node under
+  # the package manager the user already uses.
+  if [ "$(uname -s)" = "Darwin" ] && has brew; then
+    note 'installing Node via Homebrew'
+    brew install node >/dev/null 2>&1 || warn 'brew install node reported a problem'
     [ "$(node_major)" -ge "$MIN_NODE" ] && return 0
+    warn 'Homebrew did not produce a usable Node — falling back to the official tarball'
   fi
 
-  warn 'nvm did not work — falling back to the system package manager'
-  if has apt-get;  then sudo apt-get update -qq && sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
-  elif has dnf;    then sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
-  elif has yum;    then sudo yum install -y nodejs npm >/dev/null 2>&1 || true
-  elif has pacman; then sudo pacman -Sy --noconfirm nodejs npm >/dev/null 2>&1 || true
-  elif has apk;    then sudo apk add --no-cache nodejs npm >/dev/null 2>&1 || true
-  elif has zypper; then sudo zypper install -y nodejs npm >/dev/null 2>&1 || true
-  else
-    fail 'No supported package manager found.' 'Install Node 18+ yourself (https://nodejs.org), then re-run.'
+  install_node_tarball && [ "$(node_major)" -ge "$MIN_NODE" ] && return 0
+
+  # Last resort on Linux: the distro package. Often too old, hence last.
+  if [ "$(uname -s)" = "Linux" ]; then
+    warn 'falling back to the system package manager'
+    if has apt-get;  then sudo apt-get update -qq && sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
+    elif has dnf;    then sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
+    elif has yum;    then sudo yum install -y nodejs npm >/dev/null 2>&1 || true
+    elif has pacman; then sudo pacman -Sy --noconfirm nodejs npm >/dev/null 2>&1 || true
+    elif has apk;    then sudo apk add --no-cache nodejs npm >/dev/null 2>&1 || true
+    elif has zypper; then sudo zypper install -y nodejs npm >/dev/null 2>&1 || true
+    fi
   fi
   return 0
 }

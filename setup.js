@@ -274,7 +274,7 @@ function pickModel(catalogue, want) {
  * working across upgrades instead of silently falling back to a Claude model
  * the key cannot buy.
  */
-function routingEnv(key, cheap, dear) {
+function routingEnv(key, cheap, dear, contextTokens) {
   return {
     ANTHROPIC_BASE_URL: API_ROOT,
     ANTHROPIC_AUTH_TOKEN: key,
@@ -288,12 +288,17 @@ function routingEnv(key, cheap, dear) {
     CLAUDE_CODE_SUBAGENT_MODEL: cheap,
     API_TIMEOUT_MS: '600000',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    // Claude Code only knows the context window of models in its own catalogue.
+    // An OpenRouter slug is not in it, so without this it assumes 200k and
+    // auto-compacts a 1.3M-token model at a sixth of its real window. The number
+    // comes from the same catalogue response the models were chosen from.
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextTokens || 200000),
   };
 }
 
-const ROUTING_KEYS = Object.keys(routingEnv('', '', ''));
+const ROUTING_KEYS = Object.keys(routingEnv('', '', '', 0));
 
-function writeClaudeSettings(key, cheap, dear, mutate) {
+function writeClaudeSettings(key, cheap, dear, contextTokens, mutate) {
   const prev = readJson(CLAUDE_SETTINGS, {});
   const bak = backup(CLAUDE_SETTINGS);
 
@@ -302,7 +307,7 @@ function writeClaudeSettings(key, cheap, dear, mutate) {
   if (typeof env.ANTHROPIC_BASE_URL === 'string' && /127\.0\.0\.1|localhost/.test(env.ANTHROPIC_BASE_URL)) {
     info('replacing a stale local proxy URL from an older install');
   }
-  Object.assign(env, routingEnv(key, cheap, dear));
+  Object.assign(env, routingEnv(key, cheap, dear, contextTokens));
 
   const next = { ...prev, env };
   next.statusLine = { type: 'command', command: `"${process.execPath}" "${STATUSLINE}"`, padding: 0 };
@@ -450,6 +455,24 @@ Do not make me read three paragraphs to find the command.
 - If you guessed, say it was a guess.
 - If something failed, say it failed. Do not describe a failure as a success.
 - If you did not do part of the job, say which part.
+
+## Long chats
+
+This chat has a size limit. When it fills up, old parts get thrown away and you forget
+things. Watch for that and warn me **before** it happens, not after.
+
+Tell me to run \`/compact\` when any of these is true:
+
+- we just finished a task and are about to start a different one
+- you pasted or read a lot of long output (a big file, a long log, lots of search results)
+- you notice you are asking me things I already told you
+- the chat has been going a long time and is still going
+
+Say it in one line, like this:
+
+> Good time to run \`/compact\` — we just finished the install and the logs took a lot of room.
+
+Then wait. Do not run it yourself and do not nag me twice in a row about it.
 
 ## Do not
 
@@ -665,6 +688,8 @@ function modeStatus() {
   line('default', env.ANTHROPIC_MODEL || '-');
   line('background', env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '-');
   line('opus slot', env.ANTHROPIC_DEFAULT_OPUS_MODEL || '-');
+  line('context', env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    ? Number(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toLocaleString() + ' tokens' : '-');
   line('key', env.ANTHROPIC_AUTH_TOKEN ? env.ANTHROPIC_AUTH_TOKEN.slice(0, 12) + '...' : '-');
   line('statusline', (s.statusLine && s.statusLine.command) || '-');
   if (env.ANTHROPIC_BASE_URL && /127\.0\.0\.1|localhost/.test(env.ANTHROPIC_BASE_URL)) {
@@ -801,11 +826,18 @@ async function install() {
 
   say('Pointing Claude Code at OpenRouter (covers the CLI and the VSCode extension)');
   const extras = !hasFlag('--no-extras');
-  writeClaudeSettings(key, cheap.id, dear.id, (settings) => {
+  // The smaller of the two windows: one setting covers both models, and
+  // over-stating it would let a session grow past what the other can accept.
+  const contextTokens = Math.min(
+    cheap.context_length || 200000,
+    dear.context_length || 200000
+  );
+  writeClaudeSettings(key, cheap.id, dear.id, contextTokens, (settings) => {
     if (extras) installCaveman(settings);
   });
   ok(`${CLAUDE_SETTINGS} -> env.ANTHROPIC_BASE_URL = ${API_ROOT}`);
   info(`default ${cheap.id} | opus slot ${dear.id}`);
+  info(`context window ${contextTokens.toLocaleString()} tokens`);
 
   if (extras) {
     say('Writing plain-language instructions');
