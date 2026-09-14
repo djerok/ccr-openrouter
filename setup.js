@@ -300,7 +300,25 @@ async function fetchCatalogue(key) {
     die(`Could not reach openrouter.ai: ${err.message}`,
       'Check your network. Behind a proxy, set HTTPS_PROXY before running.');
   }
-  if (res.status === 401) die('OpenRouter rejected the key (401).', 'Invalid, revoked, or out of credit.');
+  if (res.status === 401) {
+    // OpenRouter answers a deleted key, or one whose account no longer resolves,
+    // with "User not found" rather than anything about the key — which reads
+    // like a bug in whatever is calling it. Name it plainly.
+    let detail = '';
+    try {
+      detail = ((await res.json()).error || {}).message || '';
+    } catch {}
+    die(
+      `OpenRouter rejected the key (401${detail ? ': ' + detail : ''}).`,
+      /user not found/i.test(detail)
+        ? [
+            'That key no longer exists, or its account is disabled or closed.',
+            'Create a new one at https://openrouter.ai/keys and re-run with --key.',
+            'This is not a problem with your setup: the same key fails against curl too.',
+          ].join(String.fromCharCode(10))
+        : 'The key is invalid, revoked, or out of credit. Check https://openrouter.ai/keys'
+    );
+  }
   if (!res.ok) die(`OpenRouter /models returned HTTP ${res.status}.`);
   const body = await res.json();
   if (!Array.isArray(body.data) || !body.data.length) die('OpenRouter returned an empty model list.');
