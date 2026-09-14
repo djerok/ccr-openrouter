@@ -348,12 +348,127 @@ npx --allow-git=root github:djerok/claude-openrouter --trim              # see/d
 
 From a clone, use `node setup.js` in place of the `npx` part.
 
+To take it all back off, see [Undoing it](#undoing-it).
+
 `--allow-git=root` is needed on npm 11+, where git-backed packages are blocked by default
 (`EALLOWGIT`). `root` allows only the package you named and still blocks git-backed
 dependencies. Older npm ignores the flag with a warning.
 
 Key precedence: `--key` → `$OPENROUTER_API_KEY` → the key already in your settings.
 No key is baked into the script.
+
+## Undoing it
+
+Everything here is reversible, and every file is backed up before it is touched.
+
+### Switch back for a while
+
+```sh
+node setup.js --off     # Claude Code goes back to your Anthropic account
+node setup.js --on      # and back to OpenRouter again
+```
+
+`--off` removes the routing variables from `~/.claude/settings.json`, restores any
+`model` setting that was parked during the install, and stashes what it removed so `--on`
+can put it back exactly. Open a new terminal, or reload the VSCode window, for either to
+take effect.
+
+### Remove it completely
+
+```sh
+node setup.js --uninstall
+```
+
+Or, without a copy of the repo on disk:
+
+```sh
+npx --allow-git=root github:djerok/claude-openrouter --uninstall
+```
+
+What that does, precisely:
+
+| | |
+|---|---|
+| **Restores** | `~/.claude/settings.json` from the newest backup that is **not** routed. If every backup is routed, it strips the routing keys from the current file instead and puts back the parked `model`. |
+| **Removes** | `~/.claude/statusline-openrouter.js`, `~/.claude/hooks/openrouter-usage.js`, `~/.claude/hooks/openrouter-autoupdate.js`, and the marked block in `~/.claude/CLAUDE.md` |
+| **Keeps** | `~/.claude/openrouter-usage.jsonl` — your own data — and every `*.bak.*` file |
+| **Never touches** | Claude Code itself, your Anthropic login, your projects, or any hook you configured yourself |
+
+MCP servers disabled with `--trim` are separate, because you may want to keep that change:
+
+```sh
+node setup.js --untrim
+```
+
+### Put the caveman hooks back
+
+Installing without `--extras` unregisters them. Files are deleted only when they are
+byte-identical to the bundled copies, so a version you modified yourself is left on disk
+and only unregistered. To re-enable:
+
+```sh
+node setup.js --key sk-or-v1-... --extras
+```
+
+### By hand, if the script is gone
+
+Everything the installer does is a few edits you can reverse yourself.
+
+**1. Edit `~/.claude/settings.json`** and delete these keys from `env`:
+
+```
+ANTHROPIC_BASE_URL              ANTHROPIC_DEFAULT_HAIKU_MODEL
+ANTHROPIC_AUTH_TOKEN            ANTHROPIC_DEFAULT_SONNET_MODEL
+ANTHROPIC_API_KEY               ANTHROPIC_DEFAULT_OPUS_MODEL
+ANTHROPIC_MODEL                 CLAUDE_CODE_SUBAGENT_MODEL
+ANTHROPIC_DEFAULT_MODEL         CLAUDE_CODE_MAX_CONTEXT_TOKENS
+ANTHROPIC_SMALL_FAST_MODEL      MAX_THINKING_TOKENS
+API_TIMEOUT_MS                  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+```
+
+If there is a `__parkedModel` key, move its value back to `model` and delete it. Remove the
+`statusLine` entry, and any `hooks` entry whose command mentions `openrouter-usage` or
+`openrouter-autoupdate`.
+
+Or simply overwrite the file with a backup — they are named
+`settings.json.bak.<timestamp>`, and the oldest one is your original.
+
+**2. Delete these files** (all optional, none of them matter to Claude Code):
+
+```
+~/.claude/statusline-openrouter.js
+~/.claude/hooks/openrouter-usage.js
+~/.claude/hooks/openrouter-autoupdate.js
+~/.claude/openrouter-setup-state.json
+~/.claude/openrouter-autoupdate.log
+~/.claude/openrouter-usage.jsonl          (your usage data — keep it if you want it)
+```
+
+**3. In `~/.claude/CLAUDE.md`**, delete everything between and including:
+
+```
+<!-- BEGIN ccr-openrouter: plain language rules -->
+<!-- END ccr-openrouter -->
+```
+
+**4. If you used `--trim`**, your MCP servers were moved out of `~/.claude.json` and stashed
+under `trimmedMcp` in `~/.claude/openrouter-setup-state.json`. Copy them back into
+`mcpServers`, or restore `~/.claude.json` from its `.bak.` file.
+
+**5. Open a new terminal**, or reload the VSCode window.
+
+Nothing runs in the background and nothing was installed as a service, so there is no
+daemon to stop and no startup entry to remove.
+
+### Stop it updating itself, without removing it
+
+```sh
+node setup.js --key sk-or-v1-... --no-autoupdate
+```
+
+That reinstalls without the session-start check. To disable it on a setup you already have,
+delete `~/.claude/hooks/openrouter-autoupdate.js` and remove the matching `SessionStart`
+hook from `settings.json`.
 
 ## Statusline
 
