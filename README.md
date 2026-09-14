@@ -74,24 +74,36 @@ miss the extension.
 $0.04/M in against $0.15/M in, so the default is 3.75x cheaper. Which of the two counts as
 cheap is read from live prices at install time, so a reprice cannot invert the labels.
 
-**One known rough edge, measured.** DeepSeek ends a tool-using turn with no text block — the
-tools run, the turn ends, nothing is printed — on roughly **4 in 10** turns:
+**One known rough edge, measured.** DeepSeek occasionally ends a tool-using turn with no
+text at all — the tool runs, the turn ends normally, and nothing is printed. Claude Code's
+own debug log shows it plainly:
 
-| model | silent turns |
-|---|---|
-| `deepseek/deepseek-v4-flash-0731` | 7 of 17 |
-| `z-ai/glm-5.3-flash` | 0 of 6 |
-
-Only turns that call a tool are affected; plain questions never failed. It is not the hooks
-(it happens with all hooks removed) and not the prompt. The same two-step tool exchange sent
-straight to the API, bypassing Claude Code, was 0 of 7 — so it appears only under the larger,
-more complex requests Claude Code actually sends.
-
-The default is left as the cheap model because that is what was asked for. To swap:
-
-```sh
-node setup.js --key sk-or-v1-... --reliable   # GLM becomes the default instead
 ```
+[engine] turn 1 end (turns=3 ... stop=end_turn resultLen=0)
+```
+
+A normal stop, and zero characters of output.
+
+| measurement | silent |
+|---|---|
+| API, two-step tool exchange, 60 trials | 1/60 (2%) |
+| through Claude Code, tool-using turns | roughly 1 in 10 |
+| `z-ai/glm-5.3-flash`, same prompt | 0/6 |
+
+**An earlier version of this file claimed 4 in 10.** That figure was measured while a
+broken hook shipped by this project was failing on every turn, and it was wrong. With that
+fixed the rate is a few percent. The correction matters: a few percent is a nuisance, 40%
+would not be usable.
+
+Two fixes were tried and did not help, so they are not in the setup:
+
+- **Telling the model to always answer.** A system-prompt instruction to never end a turn
+  without text: 1/20 silent with it, 1/20 without.
+- **Blaming one upstream provider.** OpenRouter fans a model across many backends, but all
+  60 trials on this key were served by one (`Relace`), at 2%. There is no bad backend to
+  route around.
+
+If it bothers you, `--reliable` switches the default to GLM. Otherwise, re-asking works.
 
 Extended thinking is disabled (`MAX_THINKING_TOKENS=0`), which makes the empty-answer case
 markedly rarer: OpenRouter returns thinking blocks with an empty signature, and once one is
