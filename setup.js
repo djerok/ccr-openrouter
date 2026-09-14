@@ -289,6 +289,59 @@ function resolveKey() {
   return key;
 }
 
+/**
+ * Confirm the key actually works before writing it anywhere.
+ *
+ * The catalogue endpoint is public, so it answers 200 for a dead key and the
+ * install would finish "successfully" with a configuration that cannot make a
+ * single request. /v1/key requires auth, so it is the honest check.
+ */
+async function checkKey(key) {
+  let res;
+  try {
+    res = await fetch(`${API_ROOT}/v1/key`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    warn(`could not reach OpenRouter to check the key: ${err.message}`);
+    return;
+  }
+
+  if (res.ok) {
+    const d = (await res.json()).data || {};
+    const spent = Number(d.usage || 0);
+    const left = d.limit_remaining;
+    ok(
+      `key accepted${left != null ? ` — $${Number(left).toFixed(2)} of credit left` : ''}` +
+        `${spent ? ` (spent $${spent.toFixed(2)})` : ''}`
+    );
+    if (left != null && Number(left) <= 0) {
+      warn('that key has no credit left, so every request will fail until you top it up');
+    }
+    return;
+  }
+
+  let detail = '';
+  try {
+    detail = ((await res.json()).error || {}).message || '';
+  } catch {}
+
+  if (res.status === 401) {
+    die(
+      `OpenRouter rejected the key (401${detail ? ': ' + detail : ''}).`,
+      /user not found/i.test(detail)
+        ? [
+            'That key no longer exists, or its account is disabled or closed.',
+            'Create a new one at https://openrouter.ai/keys and re-run with --key.',
+            'This is not a problem with your setup: the same key fails against curl too.',
+          ].join(String.fromCharCode(10))
+        : 'The key is invalid, revoked, or out of credit. Check https://openrouter.ai/keys'
+    );
+  }
+  warn(`could not verify the key (HTTP ${res.status}) — continuing`);
+}
+
 async function fetchCatalogue(key) {
   let res;
   try {
@@ -1677,6 +1730,9 @@ async function install() {
   const claudeBin = ensureClaudeCode();
 
   const key = resolveKey();
+
+  say('Checking the key');
+  await checkKey(key);
 
   say('Resolving models against the live OpenRouter catalogue');
   const catalogue = await fetchCatalogue(key);
