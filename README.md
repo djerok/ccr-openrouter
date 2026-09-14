@@ -74,36 +74,41 @@ miss the extension.
 $0.04/M in against $0.15/M in, so the default is 3.75x cheaper. Which of the two counts as
 cheap is read from live prices at install time, so a reprice cannot invert the labels.
 
-**One known rough edge, measured.** DeepSeek occasionally ends a tool-using turn with no
-text at all — the tool runs, the turn ends normally, and nothing is printed. Claude Code's
-own debug log shows it plainly:
+**One known rough edge.** DeepSeek occasionally ends a tool-using turn in Claude Code with
+no text at all — the tool runs, the turn ends normally, nothing is printed. Claude Code's
+debug log shows it exactly:
 
 ```
+[Stall] tool_dispatch_end tool=Bash outcome=ok durationMs=1074
 [engine] turn 1 end (turns=3 ... stop=end_turn resultLen=0)
 ```
 
-A normal stop, and zero characters of output.
+A normal stop, zero characters of output, after a tool call that succeeded.
 
-| measurement | silent |
+| measurement | result |
 |---|---|
-| API, two-step tool exchange, 60 trials | 1/60 (2%) |
-| through Claude Code, tool-using turns | roughly 1 in 10 |
-| `z-ai/glm-5.3-flash`, same prompt | 0/6 |
+| through Claude Code, tool-using turns | roughly 1 in 10 (small sample) |
+| direct API, two-step tool exchange, 60 trials | **0/60** |
+| `z-ai/glm-5.3-flash` through Claude Code | 0/6 |
 
-**An earlier version of this file claimed 4 in 10.** That figure was measured while a
-broken hook shipped by this project was failing on every turn, and it was wrong. With that
-fixed the rate is a few percent. The correction matters: a few percent is a nuisance, 40%
-would not be usable.
+It does not reproduce against the API at all, so whatever triggers it needs the larger and
+more complex exchange Claude Code really sends. If it bothers you, `--reliable` makes GLM
+the default. Otherwise re-asking works.
 
-Two fixes were tried and did not help, so they are not in the setup:
+**This number has been wrong twice in this file, in both directions.** It was first
+published as 4 in 10, measured while a hook shipped by this project was failing on every
+turn because the generated file was not valid JavaScript. It was then published as 2% at
+the API, which was a bug in the measurement: the probe answered only the first tool call
+when the model had made two, leaving a malformed conversation the model quite reasonably
+kept trying to resolve. With every tool call answered, the API figure is 0/60.
 
-- **Telling the model to always answer.** A system-prompt instruction to never end a turn
-  without text: 1/20 silent with it, 1/20 without.
-- **Blaming one upstream provider.** OpenRouter fans a model across many backends, but all
-  60 trials on this key were served by one (`Relace`), at 2%. There is no bad backend to
-  route around.
+Two candidate fixes were tested and rejected rather than shipped on a hunch:
 
-If it bothers you, `--reliable` switches the default to GLM. Otherwise, re-asking works.
+- **Instructing the model always to answer.** A system-prompt line saying never to end a
+  turn without text: 1/20 with it, 1/20 without.
+- **Blaming one upstream provider.** OpenRouter's response carries a `provider` field, so
+  failures can be attributed. Every trial on this key was served by the same provider, so
+  there is no bad backend to route around.
 
 Extended thinking is disabled (`MAX_THINKING_TOKENS=0`), which makes the empty-answer case
 markedly rarer: OpenRouter returns thinking blocks with an empty signature, and once one is
